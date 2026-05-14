@@ -1,0 +1,12 @@
+#define GWIDBOX_SKILLLIST	   	1
+#define GWIDBOX_BACKPACK	   	2
+#define GWIDBOX_SHOPLIST	   	3
+#define GWIDBOX_STATS		   	4
+#define GWIDBOX_MENU		      	5
+#define GWIDBOX_SPELLBOOK	   	6
+#define GWIDBOX_SPELLBOOKGAUGE	7
+#define GWIDBOX_STORY			   8
+#define GWIDBOX_PLAYER_LISTING   9
+#define GWIDBOX_MACRO            10
+#define GWIDBOX_HELPBOX          11
+#define GWIDBOX_BACKLOG          12

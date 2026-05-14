@@ -1,0 +1,30 @@
+# --- Dossiers de build (Le gros du volume) ---
+[Debug]/
+[Release]/
+x64/
+x86/
+build/
+
+# --- Artefacts Visual Studio ---
+.vs/
+*.sdf
+*.opensdf
+*.VC.db
+*.ipch
+*.suo
+*.user
+
+# --- Sorties de compilation ---
+*.obj
+*.pdb
+*.idb
+*.tlog
+*.lastbuildstate
+*.exe
+*.dll
+*.lib
+*.pch
+
+# --- Fichiers temporaires système ---
+Thumbs.db
+.DS_Store
