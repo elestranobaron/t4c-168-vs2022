@@ -1,9 +1,21 @@
-=== T4C network session 2026-05-16 06:42:39 ===
-2026-05-16 06:42:39 | [NET] InitSocket: bound UDP, local port 32870
-2026-05-16 06:42:39 | [CRYPT] Protocole filaire S (TFCCrypt::EncryptS / DecryptS, CryptMestoph).
-2026-05-16 06:42:39 | [NET] CCommCenter started (ephemeral UDP bind, IOCP compat threads).
-2026-05-16 06:42:39 | [NET] Server endpoint resolved, host="192.168.1.76" UDP port 11677 (default 11677 if port field empty/invalid).
-2026-05-16 06:42:39 | [AUTH] Envoi RQ_RegisterAccount (20 octets TFC), login_len=4 (mot de passe non loggue).
-2026-05-16 06:42:39 | [PHASE] Pipeline client Linux : 1) UDP+S OK 2) ce paquet cree le compte/session 3) le serveur enverra d'autres RQ (version, MOTD...) 4) RQ_GetPersonnalPClist = pret pour le jeu (arret avant SDL3 monde).
-2026-05-16 06:42:39 | [UDP] -> file d'envoi : paquet register (20 octets applicatifs).
-2026-05-16 06:42:39 | [UDP] -> sendto OK, 23 bytes (UDP frame)
+=== T4C network session 2026-05-16 08:29:14 ===
+2026-05-16 08:29:19 | [NET] InitSocket: bound UDP, local port 38077
+2026-05-16 08:29:19 | [CRYPT] Protocole filaire S (TFCCrypt::EncryptS / DecryptS, CryptMestoph).
+2026-05-16 08:29:19 | [NET] CCommCenter started (ephemeral UDP bind, IOCP compat threads).
+2026-05-16 08:29:19 | [NET] Server endpoint resolved, host="192.168.1.76" UDP port 11677 (default 11677 if port field empty/invalid).
+2026-05-16 08:29:19 | [AUTH] Envoi RQ_RegisterAccount (18 octets TFC), login_len=4 pwd_len=2 (mot de passe non loggue — la taille TFC = 4 en-tete + 2 opcode + 1+login + 1+pwd + 4 version).
+2026-05-16 08:29:19 | [PHASE] Pipeline (ordre client 1.68 / serveur RC) : **1/5** envoi RQ_RegisterAccount (14) — **2/5** reponse 14 + octet 0/!=0 — **3/5** envoi RQ_AuthenticateServerVersion (99) + long version — **4/5** reponse 99 + long 1=OK — **5/5** [FINAL STEP] ici (sans monde). Ensuite jeu : **26** liste persos, **65** query version serveur, MOTD, etc.
+2026-05-16 08:29:19 | [UDP] -> file d'envoi : paquet register (18 octets applicatifs).
+2026-05-16 08:29:19 | [NET] **Etape courante : 1/5 envoyee.** Le client ne « lance » rien apres : le thread `UDPReceiveDataThread` est bloque dans **recvfrom()** sur le port local (voir InitSocket). La suite (DecryptS, [AUTH], [FINAL STEP]) n'apparait **qu'apres** une ligne `[UDP] <- recvfrom raw ...` — donc reception d'un datagramme depuis 192.168.1.76:11677. Si rien ne vient : serveur arrete, mauvais port, pare-feu UDP, ou le serveur ne repond pas a ce register.
+2026-05-16 08:29:19 | [UDP] -> sendto OK, 21 bytes (UDP frame)
+2026-05-16 08:29:19 | [UDP] <- recvfrom raw 55 bytes (queued to packet thread)
+2026-05-16 08:29:19 | [UDP] post-decrypt hdr raw=0xB401 safe=1 lastFrag=0 rsv=0 pktID=5760 len=55 dataLen=52
+2026-05-16 08:29:19 | [UDP] payload head 24/52: 00 00 00 00 00 0E 01 00 2B 59 6F 75 72 20 61 63 63 6F 75 6E 74 20 69 73 
+2026-05-16 08:29:19 | [AUTH] <- opcode 14 (0x000E) RQ_RegisterAccount, app payload 52 bytes
+2026-05-16 08:29:19 | [UDP] -> sendto OK, 2 bytes (UDP frame)
+2026-05-16 08:29:19 | [PHASE] 2/5 — Reponse RQ_RegisterAccount (14), 52 octets applicatifs (TFC + corps).
+2026-05-16 08:29:19 | [AUTH] Octet resultat @offset 6 (apres opcode BE) = 0x01 (1) — 1_REFUS (mauvais MDP, compte deja connecte ailleurs, ou autre erreur auth — lire le message texte)
+2026-05-16 08:29:19 | [AUTH] Brut TFC offsets 4..11 : 00 0E 01 00 2B 59 6F 75
+2026-05-16 08:29:19 | [AUTH] Verdict : **REFUSE** (code 1). Causes frequentes : mauvais mot de passe **ou** autre refus (ex. compte deja connecte). Format : `short` BE longueur puis texte (main.cpp).
+2026-05-16 08:29:19 | [AUTH] Message serveur (43 octets, affiche max 43) : Your account is already logged on a server.
+2026-05-16 08:29:19 | [NET] UDPAnalyseThread -> lpReadCallback (52 app bytes)

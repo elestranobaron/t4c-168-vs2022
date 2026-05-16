@@ -454,10 +454,10 @@ void CCommCenter::SendPacket(sockaddr_in sockAddr,LPBYTE lpBuffer,int nBufferSiz
        pPacket->packetData   = pPacket->lpBuffer + HEADER_SIZE;
        pPacket->dataLen      = nBufferSize;
 
-       // Copy buffer into packet.
+       std::memset(pPacket->lpBuffer, 0, HEADER_SIZE);
        memcpy( pPacket->packetData, lpBuffer, nBufferSize );
 
-       // Setup the packet structure, leave the header unchanged.
+       // Setup the packet structure (header was zeroed; do not leave heap garbage in Reserved).
        pPacket->boDelete     = FALSE;
        pPacket->nQueueCount  = 0;
        pPacket->sockAddr     = sockAddr;
@@ -469,16 +469,10 @@ void CCommCenter::SendPacket(sockaddr_in sockAddr,LPBYTE lpBuffer,int nBufferSiz
        else 
           pPacket->packetHeader->safe = 0;
 
-       static int dwCnt = 0;
        pPacket->packetHeader->lastFrag = 0;
-       /*if((rand()%1000) <500 || ++dwCnt >5) //BLBLBL tiens ? c'est comique ce random, un prototype revue de CSMA/CD over UDP ?
-       {
-          pPacket->packetHeader->Reserved = 1;
-          if(dwCnt >5)
-             dwCnt = 0;
-       }
-       else
-          pPacket->packetHeader->Reserved = 0; */ // steph d?sactivation
+       /* Random Reserved path was disabled: without this, the first 2 buffer bytes are heap
+        * garbage; Reserved==1 makes client DecryptS run DecryptS2 (TYPE_MASK) on plaintext. */
+       pPacket->packetHeader->Reserved = 0;
 
        pPacket->packetHeader->packetID  = lpConnection->GetUnfragmentedPacketID();
        //Send the packet to Pre Sending queue
@@ -653,7 +647,7 @@ void CCommCenter::SendAck(UDPPacket* pPacket)
    pPacketAck->packetData   = NULL;
    pPacketAck->dataLen      = 0;
 
-   // The ack's ID is the ID of the packet it acknowledges ? lire depuis l?octet brut ( MSVC / GCC bitfields différents).
+   // The ack's ID is the ID of the packet it acknowledges ? lire depuis l?octet brut ( MSVC / GCC bitfields diff?rents).
    const unsigned wack =
        static_cast<unsigned>(pPacket->lpBuffer[0]) | (static_cast<unsigned>(pPacket->lpBuffer[1]) << 8);
    pPacketAck->packetHeader->packetID = static_cast<WORD>((wack >> 3) & 0x1FFFu);
@@ -1685,6 +1679,13 @@ void CCommCenter::AnalyzeUPPData(UDPPacket* pPacket)
             }
             else
             {
+#if defined(LINUX_PORT) && !defined(_WIN32)
+               T4CNetworkDebugLogKind(
+                   T4CMatrixLogKind::Warn,
+                   "[UDP] Paquet **non fragmente** (pktID=%u >= %u) mais lastFrag=1 ? **jete** sans analyse "
+                   "(logique CommCenter d'origine). Attendu lastFrag=0 ; sinon aucun callback.",
+                   in_packetID, static_cast<unsigned>(NONFRAGMENTED_PACKETS_IDOFFSET));
+#endif
                if(pPacket->lpBuffer)
                   delete []pPacket->lpBuffer;
                pPacket->lpBuffer = NULL;
@@ -1695,6 +1696,11 @@ void CCommCenter::AnalyzeUPPData(UDPPacket* pPacket)
       }
       else
       {
+#if defined(LINUX_PORT) && !defined(_WIN32)
+         T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
+                                "[UDP] Paquet duplique (packetID=%u) ? ignore, pas de callback.",
+                                in_packetID);
+#endif
          if(pPacket->lpBuffer)
             delete []pPacket->lpBuffer;
          pPacket->lpBuffer = NULL;
