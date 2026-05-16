@@ -1,50 +1,67 @@
 #include "Mutex.h"
 
-CNMMutex::CNMMutex(bool Locked)
-{
-   m_pMutex = NULL;
-   pthread_mutex_t* lMutex = new pthread_mutex_t;
-   if( (*lMutex = ::CreateMutex(0, 0, 0)) == 0 )
-   {
-      //Unable to create Mutex
-      //throw CException(eOtherError, "Mutex::Mutex() can't create!");
-   }
-   else
-      m_pMutex = lMutex;
-   
-   if(Locked) 
-      Lock();
+#if defined(LINUX_PORT) && !defined(_WIN32)
+
+CNMMutex::CNMMutex(bool locked) {
+    if (locked) {
+        Lock();
+    }
 }
 
-CNMMutex::~CNMMutex()
-{
-   pthread_mutex_t* lMutex = (pthread_mutex_t*) m_pMutex;
-   while(::CloseHandle(*lMutex) == 0 )
-   {
-      // wait for mutex to unlock
-      Lock();
-      Unlock();
-   }//end while
-   
-   delete m_pMutex;
-   m_pMutex = NULL;
+CNMMutex::~CNMMutex() {}
+
+CNMMutex &CNMMutex::operator=(CNMMutex &M) {
+    (void)M;
+    return *this;
 }
 
-void CNMMutex::Lock() const
-{
-   pthread_mutex_t* lMutex = (pthread_mutex_t*) m_pMutex;
-   if( ::WaitForSingleObject(*lMutex, INFINITE) != WAIT_OBJECT_0 )
-   {
-      //throw CException(eWouldDeadLock, "Mutex::lock() can't lock!");
-   }
+CNMMutex::CNMMutex(const CNMMutex &) {}
+
+void CNMMutex::Lock() const { m_mutex.lock(); }
+
+void CNMMutex::Unlock() const { m_mutex.unlock(); }
+
+#else
+
+CNMMutex::CNMMutex(bool Locked) {
+    m_pMutex = NULL;
+    pthread_mutex_t *lMutex = new pthread_mutex_t;
+    if ((*lMutex = ::CreateMutex(0, 0, 0)) == 0) {
+    } else
+        m_pMutex = lMutex;
+
+    if (Locked)
+        Lock();
 }
 
-void CNMMutex::Unlock() const
-{
-   pthread_mutex_t* lMutex = (pthread_mutex_t*) m_pMutex;
-   if( ::ReleaseMutex(*lMutex) == 0 )
-   {
-      //throw CException(eMutexNotOwned, "Mutex::unlock() can't unlock!");
-   }
+CNMMutex::~CNMMutex() {
+    pthread_mutex_t *lMutex = (pthread_mutex_t *)m_pMutex;
+    while (::CloseHandle(*lMutex) == 0) {
+        Lock();
+        Unlock();
+    }
+
+    delete m_pMutex;
+    m_pMutex = NULL;
 }
 
+void CNMMutex::Lock() const {
+    pthread_mutex_t *lMutex = (pthread_mutex_t *)m_pMutex;
+    if (::WaitForSingleObject(*lMutex, INFINITE) != WAIT_OBJECT_0) {
+    }
+}
+
+void CNMMutex::Unlock() const {
+    pthread_mutex_t *lMutex = (pthread_mutex_t *)m_pMutex;
+    if (::ReleaseMutex(*lMutex) == 0) {
+    }
+}
+
+CNMMutex &CNMMutex::operator=(CNMMutex &M) {
+    (void)M;
+    return *this;
+}
+
+CNMMutex::CNMMutex(const CNMMutex &) {}
+
+#endif

@@ -1,0 +1,101 @@
+cmake_minimum_required(VERSION 3.16)
+project(T4CClientLinux)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Force le build en Debug pour l'investigation dans Cursor / GDB
+set(CMAKE_BUILD_TYPE Debug)
+
+# --- RECHERCHE DES DEPENDANCES (Ton excellente base SDL3) ---
+find_package(PkgConfig REQUIRED)
+find_package(SDL3 REQUIRED CONFIG)
+
+# SDL3_image
+find_package(SDL3_image QUIET CONFIG)
+if(NOT SDL3_image_FOUND)
+    message(STATUS "SDL3_image not found, fetching from source...")
+    include(FetchContent)
+    FetchContent_Declare(
+        SDL3_image
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL_image.git
+        GIT_TAG release-3.2.4
+    )
+    FetchContent_MakeAvailable(SDL3_image)
+    set(SDL3_IMAGE_INCLUDE_DIR ${sdl3_image_SOURCE_DIR}/include)
+    set(SDL3_IMAGE_LIBRARY ${sdl3_image_BINARY_DIR}/libSDL3_image.so)
+    set(SDL3_image_FOUND TRUE)
+endif()
+
+# SDL3_ttf
+find_package(SDL3_ttf QUIET CONFIG)
+if(NOT SDL3_ttf_FOUND)
+    message(STATUS "SDL3_ttf not found, fetching from source...")
+    include(FetchContent)
+    FetchContent_Declare(
+        SDL3_ttf
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
+        GIT_TAG release-3.2.3
+    )
+    FetchContent_MakeAvailable(SDL3_ttf)
+    set(SDL3_TTF_INCLUDE_DIR ${sdl3_ttf_SOURCE_DIR}/include)
+    set(SDL3_TTF_LIBRARY ${sdl3_ttf_BINARY_DIR}/libSDL3_ttf.so)
+    set(SDL3_ttf_FOUND TRUE)
+endif()
+
+find_package(Threads REQUIRED)
+
+set(T4C_CLIENT_DIR "${CMAKE_SOURCE_DIR}/CLIENT168_RC14h_OK/1.68RC14h/Client/T4C Client")
+
+# --- INCLUSIONS DES DOSSIERS ---
+include_directories(${SDL3_INCLUDE_DIRS})
+include_directories(${SDL3_IMAGE_INCLUDE_DIR})
+include_directories(${SDL3_TTF_INCLUDE_DIR})
+include_directories(${CMAKE_SOURCE_DIR}/src)
+include_directories("${T4C_CLIENT_DIR}")
+include_directories("${T4C_CLIENT_DIR}/UDP")
+
+# --- DEFINITIONS DE PRECOMPILATION CRUCIALES ---
+# On indique au code qu'on est sous Linux pour désactiver les headers Windows indisponibles
+add_compile_definitions(LINUX_PORT)
+
+# --- LES SOURCES ---
+set(SOURCES
+    src/main.cpp
+    src/gui/LoginScreen.cpp
+    src/gui/LoginClientConfig.cpp
+    src/network/T4CNetworkDebugLog.cpp
+    src/network/T4CLoginSession.cpp
+    src/network/IOCPCompat.cpp
+    src/network/T4CLinuxCommPort.cpp
+    src/network/CryptStubLinux.cpp
+    "${CMAKE_SOURCE_DIR}/CLIENT168_RC14h_OK/1.68RC14h/CryptMestoph/crypt.cpp"
+    src/network/CommCenter.cpp
+    "${T4C_CLIENT_DIR}/Random.cpp"
+    "${T4C_CLIENT_DIR}/UDP/Mutex.cpp"
+    "${T4C_CLIENT_DIR}/UDP/Semaphore.cpp"
+)
+
+# C'est ici que tu ajouteras TFCPacket.cpp, Comm.cpp, etc. au fur et à mesure
+
+# --- EXECUTABLE ---
+add_executable(t4c_client ${SOURCES})
+
+target_include_directories(t4c_client PRIVATE "${CMAKE_SOURCE_DIR}/CLIENT168_RC14h_OK/1.68RC14h/CryptMestoph")
+
+# --- LINKAGE DES LIBRARIES ---
+target_link_libraries(t4c_client PRIVATE SDL3::SDL3)
+
+if(SDL3_image_FOUND AND TARGET SDL3_image::SDL3_image)
+    target_link_libraries(t4c_client PRIVATE SDL3_image::SDL3_image)
+else()
+    target_link_libraries(t4c_client PRIVATE ${SDL3_IMAGE_LIBRARY})
+endif()
+
+if(SDL3_ttf_FOUND AND TARGET SDL3_ttf::SDL3_ttf)
+    target_link_libraries(t4c_client PRIVATE SDL3_ttf::SDL3_ttf)
+else()
+    target_link_libraries(t4c_client PRIVATE ${SDL3_TTF_LIBRARY})
+endif()
+
+target_link_libraries(t4c_client PRIVATE Threads::Threads m)

@@ -1,12 +1,17 @@
 #if !defined(AFX_LOCK_H__5FD5B65A_35EB_11D2_83CE_00E02922FA40__INCLUDED_)
 #define AFX_LOCK_H__5FD5B65A_35EB_11D2_83CE_00E02922FA40__INCLUDED_
 
+#if defined(LINUX_PORT) && !defined(_WIN32)
+#include "network/T4CLinuxCommPort.h"
+#include <mutex>
+#else
 #include <windows.h>
+#endif
 
 #define MultiLock( __lock1, __lock2 ) (__lock1)->Lock();\
                         while( !(__lock2)->PickLock() ){\
                             (__lock1)->Unlock();\
-                            Sleep( 0 );\
+                            Sleep(0);\
                             (__lock1)->Lock();\
                         }
 #define MultiLock3( __lock1, __lock2, __lock3 ){\
@@ -34,6 +39,26 @@
 class CLock  
 {
 public:
+#if defined(LINUX_PORT) && !defined(_WIN32)
+    CLock() = default;
+    virtual ~CLock() = default;
+
+    void Lock( void ){    
+        csThreadLock.lock();
+    };
+
+    void Unlock( void ){    
+        csThreadLock.unlock();
+    }
+    
+    BOOL PickLock( void ){
+        return csThreadLock.try_lock() ? TRUE : FALSE;
+    }
+
+private:
+    std::recursive_mutex csThreadLock;
+
+#else
     CLock(){ 
         InitializeCriticalSection( &csThreadLock ); 
     };
@@ -61,6 +86,8 @@ public:
 
 private:
     CRITICAL_SECTION csThreadLock;
+
+#endif
 
 };
 

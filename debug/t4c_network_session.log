@@ -1,0 +1,9 @@
+=== T4C network session 2026-05-16 06:42:39 ===
+2026-05-16 06:42:39 | [NET] InitSocket: bound UDP, local port 32870
+2026-05-16 06:42:39 | [CRYPT] Protocole filaire S (TFCCrypt::EncryptS / DecryptS, CryptMestoph).
+2026-05-16 06:42:39 | [NET] CCommCenter started (ephemeral UDP bind, IOCP compat threads).
+2026-05-16 06:42:39 | [NET] Server endpoint resolved, host="192.168.1.76" UDP port 11677 (default 11677 if port field empty/invalid).
+2026-05-16 06:42:39 | [AUTH] Envoi RQ_RegisterAccount (20 octets TFC), login_len=4 (mot de passe non loggue).
+2026-05-16 06:42:39 | [PHASE] Pipeline client Linux : 1) UDP+S OK 2) ce paquet cree le compte/session 3) le serveur enverra d'autres RQ (version, MOTD...) 4) RQ_GetPersonnalPClist = pret pour le jeu (arret avant SDL3 monde).
+2026-05-16 06:42:39 | [UDP] -> file d'envoi : paquet register (20 octets applicatifs).
+2026-05-16 06:42:39 | [UDP] -> sendto OK, 23 bytes (UDP frame)

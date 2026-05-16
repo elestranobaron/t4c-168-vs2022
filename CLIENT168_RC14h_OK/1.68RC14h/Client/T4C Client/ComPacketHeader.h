@@ -1,9 +1,28 @@
 #ifndef NM_PACKET_HEADER_H
 #define NM_PACKET_HEADER_H
 
+#if defined(LINUX_PORT) && !defined(_WIN32)
+#include <netinet/in.h>
+#include <SDL3/SDL.h>
+#include <cstdint>
+typedef std::uint16_t WORD;
+typedef std::uint32_t DWORD;
+typedef unsigned char BYTE;
+typedef BYTE *LPBYTE;
+#ifndef BOOL
+typedef int BOOL;
+#endif
+#ifndef TRUE
+#define TRUE 1
+#endif
+#ifndef FALSE
+#define FALSE 0
+#endif
+#endif
 
-//#define MAX_PACKET_SIZE     1024//BLBLBL 07/12/2010 Je remet ‡ 1024
-#define MAX_PACKET_SIZE     512 //BLBL en UDP, les paquets plus gros que 512 ont parfois du mal ‡ Ítre routÈs correctement.
+
+//#define MAX_PACKET_SIZE     1024//BLBLBL 07/12/2010 Je remet ù 1024
+#define MAX_PACKET_SIZE     512 //BLBL en UDP, les paquets plus gros que 512 ont parfois du mal ù ùtre routùs correctement.
 #define HEADER_SIZE         sizeof( UDPPacketHeader )
 #define CHKSUM_SIZE         1
 #define MAX_DATA_SIZE       ( MAX_PACKET_SIZE - HEADER_SIZE -CHKSUM_SIZE) //1 is checksum...
@@ -23,10 +42,14 @@
 
 #define ENABLE_CONNECTION_LOST_LISTING
 
-#define USE_CLIENT_CONNECTION
+//#define USE_CLIENT_CONNECTION
 
-#ifdef USE_CLIENT_CONNECTION
-   #define GetRunTime() timeGetTime()
+#if defined(LINUX_PORT) && !defined(_WIN32)
+#define GetRunTime() (static_cast<DWORD>(SDL_GetTicks()))
+#elif defined(USE_CLIENT_CONNECTION)
+#define GetRunTime() timeGetTime()
+#elif defined(_WIN32)
+#define GetRunTime() timeGetTime()
 #endif
 
 typedef struct _UDPPacketHeader
@@ -38,7 +61,7 @@ typedef struct _UDPPacketHeader
       Reserved : 1,      // ??????
       packetID   : 13;   // Id :)
 } UDPPacketHeader;
- 
+
 typedef struct _UDPPacket
 {
    // Data members
@@ -54,8 +77,8 @@ typedef struct _UDPPacket
    int					   dataLen;       // size of the data part of the buffer
    BYTE				      *packetData;   // Pointer to the data part of the buffer (for ease of use)
    UDPPacketHeader		*packetHeader; // Pointer to the header part of the buffer (for ease of use)
-   UDPPacketHeader HeaderSave;//BLBLBL Ajout de Chaotik pour mÈmoriser l'Ètat, et tenter de corriger le bug des ack cryptÈs
-   //BOOL					needAck; // BLBLBL simplification de la solution pour voir si Áa evite les crashs
+   UDPPacketHeader HeaderSave;//BLBLBL Ajout de Chaotik pour mùmoriser l'ùtat, et tenter de corriger le bug des ack cryptùs
+   //BOOL					needAck; // BLBLBL simplification de la solution pour voir si ùa evite les crashs
 
 } UDPPacket;
 

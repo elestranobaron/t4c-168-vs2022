@@ -9,11 +9,21 @@
 #include "ComPacketHeader.h"
 #pragma warning( disable:4786 )
 #ifndef USE_CLIENT_CONNECTION
+   #if defined(LINUX_PORT) && !defined(_WIN32)
+   #include "network/T4CLinuxCommPort.h"
+   #else
    #include <afxsock.h>
+   #endif
 #else
+   #if defined(LINUX_PORT) && !defined(_WIN32)
+   #include <queue>
+   #include "UDP/Queue.h"
+   #include "network/T4CLinuxCommPort.h"
+   #else
    #include <windows.h>
    #include <queue>
    #include "UDP/Queue.h"
+   #endif
 #endif
    
 #include <vector>

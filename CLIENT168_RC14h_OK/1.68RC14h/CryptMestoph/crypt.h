@@ -1,8 +1,10 @@
-#ifndef CRYPT_H
-#define CRYPT_H
+#ifndef T4C_CRYPTMESTOPH_CRYPT_H
+#define T4C_CRYPTMESTOPH_CRYPT_H
 
+#ifdef _WIN32
 #include <windows.h>
-#include "Xorkey.h"
+#endif
+#include "xorkey.h"
 
 namespace TFCCrypt 
 {   
@@ -11,4 +13,4 @@ namespace TFCCrypt
 	unsigned long DecryptS2(unsigned char *&pBuffer, int &pBufferSize,unsigned int dwKey = 0xFFFFFFFF);
 }
 
-#endif // CRYPT_H
+#endif // T4C_CRYPTMESTOPH_CRYPT_H

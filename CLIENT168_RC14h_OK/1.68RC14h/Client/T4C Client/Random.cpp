@@ -1,7 +1,13 @@
+#if defined(LINUX_PORT) && !defined(_WIN32)
+#include "network/T4CLinuxCommPort.h"
+#else
 #include "pch.h"
 #include <windows.h>
+#endif
 #include "Random.h"
+#ifndef LINUX_PORT
 #include "Global.h"
+#endif
 
 //////////////////////////////////////////////////////////////////////
 // Construction/Destruction

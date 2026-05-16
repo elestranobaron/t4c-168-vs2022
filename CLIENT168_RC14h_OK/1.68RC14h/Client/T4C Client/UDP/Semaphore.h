@@ -5,30 +5,48 @@
 #pragma once
 #endif
 
-//#ifndef  _WIN32_WINNT
-//  #define  _WIN32_WINNT 0x0400 // for SignalObjectAndWait
-//#endif
+#if defined(LINUX_PORT) && !defined(_WIN32)
+
+#include "network/T4CLinuxCommPort.h"
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+
+class CNMSemaphore {
+public:
+    CNMSemaphore(unsigned char count = 1, unsigned int waitsec = 0);
+    virtual ~CNMSemaphore();
+
+    int Wait();
+    int Post();
+
+private:
+    long initCount;
+    long WaitSec;
+    long currentCount;
+    std::mutex mtx;
+    std::condition_variable cv;
+};
+
+#else
 
 #include <windows.h>
 
-class CNMSemaphore
-{
-   
-public: 
-   CNMSemaphore(unsigned char count=1, unsigned int waitsec=0);
-   virtual ~CNMSemaphore();
-   
-   int Wait();
-   int Post();
+class CNMSemaphore {
+public:
+    CNMSemaphore(unsigned char count = 1, unsigned int waitsec = 0);
+    virtual ~CNMSemaphore();
+
+    int Wait();
+    int Post();
 
 private:
-   
-   long initCount;  // initialCount 
-   long WaitSec;    // max count
-   
-   HANDLE semaphore;
-   LPSECURITY_ATTRIBUTES sa;
+    long initCount;
+    long WaitSec;
+    HANDLE semaphore;
+    LPSECURITY_ATTRIBUTES sa;
 };
 
+#endif
 
 #endif
