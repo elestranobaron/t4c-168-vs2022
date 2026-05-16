@@ -1,21 +1,53 @@
-=== T4C network session 2026-05-16 08:29:14 ===
-2026-05-16 08:29:19 | [NET] InitSocket: bound UDP, local port 38077
-2026-05-16 08:29:19 | [CRYPT] Protocole filaire S (TFCCrypt::EncryptS / DecryptS, CryptMestoph).
-2026-05-16 08:29:19 | [NET] CCommCenter started (ephemeral UDP bind, IOCP compat threads).
-2026-05-16 08:29:19 | [NET] Server endpoint resolved, host="192.168.1.76" UDP port 11677 (default 11677 if port field empty/invalid).
-2026-05-16 08:29:19 | [AUTH] Envoi RQ_RegisterAccount (18 octets TFC), login_len=4 pwd_len=2 (mot de passe non loggue — la taille TFC = 4 en-tete + 2 opcode + 1+login + 1+pwd + 4 version).
-2026-05-16 08:29:19 | [PHASE] Pipeline (ordre client 1.68 / serveur RC) : **1/5** envoi RQ_RegisterAccount (14) — **2/5** reponse 14 + octet 0/!=0 — **3/5** envoi RQ_AuthenticateServerVersion (99) + long version — **4/5** reponse 99 + long 1=OK — **5/5** [FINAL STEP] ici (sans monde). Ensuite jeu : **26** liste persos, **65** query version serveur, MOTD, etc.
-2026-05-16 08:29:19 | [UDP] -> file d'envoi : paquet register (18 octets applicatifs).
-2026-05-16 08:29:19 | [NET] **Etape courante : 1/5 envoyee.** Le client ne « lance » rien apres : le thread `UDPReceiveDataThread` est bloque dans **recvfrom()** sur le port local (voir InitSocket). La suite (DecryptS, [AUTH], [FINAL STEP]) n'apparait **qu'apres** une ligne `[UDP] <- recvfrom raw ...` — donc reception d'un datagramme depuis 192.168.1.76:11677. Si rien ne vient : serveur arrete, mauvais port, pare-feu UDP, ou le serveur ne repond pas a ce register.
-2026-05-16 08:29:19 | [UDP] -> sendto OK, 21 bytes (UDP frame)
-2026-05-16 08:29:19 | [UDP] <- recvfrom raw 55 bytes (queued to packet thread)
-2026-05-16 08:29:19 | [UDP] post-decrypt hdr raw=0xB401 safe=1 lastFrag=0 rsv=0 pktID=5760 len=55 dataLen=52
-2026-05-16 08:29:19 | [UDP] payload head 24/52: 00 00 00 00 00 0E 01 00 2B 59 6F 75 72 20 61 63 63 6F 75 6E 74 20 69 73 
-2026-05-16 08:29:19 | [AUTH] <- opcode 14 (0x000E) RQ_RegisterAccount, app payload 52 bytes
-2026-05-16 08:29:19 | [UDP] -> sendto OK, 2 bytes (UDP frame)
-2026-05-16 08:29:19 | [PHASE] 2/5 — Reponse RQ_RegisterAccount (14), 52 octets applicatifs (TFC + corps).
-2026-05-16 08:29:19 | [AUTH] Octet resultat @offset 6 (apres opcode BE) = 0x01 (1) — 1_REFUS (mauvais MDP, compte deja connecte ailleurs, ou autre erreur auth — lire le message texte)
-2026-05-16 08:29:19 | [AUTH] Brut TFC offsets 4..11 : 00 0E 01 00 2B 59 6F 75
-2026-05-16 08:29:19 | [AUTH] Verdict : **REFUSE** (code 1). Causes frequentes : mauvais mot de passe **ou** autre refus (ex. compte deja connecte). Format : `short` BE longueur puis texte (main.cpp).
-2026-05-16 08:29:19 | [AUTH] Message serveur (43 octets, affiche max 43) : Your account is already logged on a server.
-2026-05-16 08:29:19 | [NET] UDPAnalyseThread -> lpReadCallback (52 app bytes)
+=== T4C network session 2026-05-16 19:01:16 ===
+2026-05-16 19:01:21 | [NET] InitSocket: bound UDP, local port 46074
+2026-05-16 19:01:21 | [CRYPT] Protocole filaire S (TFCCrypt::EncryptS / DecryptS, CryptMestoph).
+2026-05-16 19:01:21 | [NET] CCommCenter started (ephemeral UDP bind, IOCP compat threads).
+2026-05-16 19:01:21 | [NET] Server endpoint resolved, host="192.168.1.76" UDP port 11677 (default 11677 if port field empty/invalid).
+2026-05-16 19:01:21 | [AUTH] Envoi RQ_RegisterAccount (20 octets TFC), login_len=4 pwd_len=4 (mot de passe non loggue — la taille TFC = 4 en-tete + 2 opcode + 1+login + 1+pwd + 4 version).
+2026-05-16 19:01:21 | [PHASE] Pipeline (ordre client 1.68 / serveur RC) : **1/5** envoi RQ_RegisterAccount (14) — **2/5** reponse 14 + octet 0/!=0 — **3/5** envoi RQ_AuthenticateServerVersion (99) + long version — **4/5** reponse 99 + long 1=OK — **5/5** [FINAL STEP] ici (sans monde). Ensuite jeu : **26** liste persos, **65** query version serveur, MOTD, etc.
+2026-05-16 19:01:21 | [UDP] -> file d'envoi : paquet register (20 octets applicatifs).
+2026-05-16 19:01:21 | [NET] **Etape courante : 1/5 envoyee.** Le client ne « lance » rien apres : le thread `UDPReceiveDataThread` est bloque dans **recvfrom()** sur le port local (voir InitSocket). La suite (DecryptS, [AUTH], [FINAL STEP]) n'apparait **qu'apres** une ligne `[UDP] <- recvfrom raw ...` — donc reception d'un datagramme depuis 192.168.1.76:11677. Si rien ne vient : serveur arrete, mauvais port, pare-feu UDP, ou le serveur ne repond pas a ce register.
+2026-05-16 19:01:21 | [UDP] -> sendto OK, 23 bytes (UDP frame)
+2026-05-16 19:01:21 | [UDP] <- recvfrom raw 38 bytes (queued to packet thread)
+2026-05-16 19:01:21 | [UDP] post-decrypt hdr raw=0xB401 safe=1 lastFrag=0 rsv=0 pktID=5760 len=38 dataLen=35
+2026-05-16 19:01:21 | [UDP] -> sendto OK, 2 bytes (UDP frame)
+2026-05-16 19:01:21 | [UDP] payload head 24/35: 00 00 00 00 00 0E 00 00 1A 57 65 6C 63 6F 6D 65 20 74 6F 20 54 68 65 20 
+2026-05-16 19:01:21 | [AUTH] <- opcode 14 (0x000E) RQ_RegisterAccount, app payload 35 bytes
+2026-05-16 19:01:21 | [PHASE] 2/5 — Reponse RQ_RegisterAccount (14), 35 octets applicatifs (TFC + corps).
+2026-05-16 19:01:21 | [AUTH] Octet resultat @offset 6 (apres opcode BE) = 0x00 (0) — 0_OK (compte / session acceptee cote protocole — voir texte serveur)
+2026-05-16 19:01:21 | [AUTH] Brut TFC offsets 4..11 : 00 0E 00 00 1A 57 65 6C
+2026-05-16 19:01:21 | [AUTH] Verdict : **ACCEPTE** (code 0). Etape client suivante (main.cpp 1.68) : envoyer **RQ_AuthenticateServerVersion (99)** avec la version (long), puis le serveur repond **99** + long 1=OK / 0=refus version.
+2026-05-16 19:01:21 | [PHASE] 3/5 — Envoi RQ_AuthenticateServerVersion (99), clientVersion(long)=14.
+2026-05-16 19:01:21 | [UDP] -> file d'envoi : paquet AuthenticateServerVersion (10 octets TFC).
+2026-05-16 19:01:21 | [NET] UDPAnalyseThread -> lpReadCallback (35 app bytes)
+2026-05-16 19:01:21 | [UDP] -> sendto OK, 13 bytes (UDP frame)
+2026-05-16 19:01:21 | [UDP] <- recvfrom raw 13 bytes (queued to packet thread)
+2026-05-16 19:01:21 | [UDP] post-decrypt hdr raw=0xB409 safe=1 lastFrag=0 rsv=0 pktID=5761 len=13 dataLen=10
+2026-05-16 19:01:21 | [UDP] payload head 10/10: 00 00 00 00 00 63 00 00 00 01 
+2026-05-16 19:01:21 | [AUTH] <- opcode 99 (0x0063) RQ_AuthenticateServerVersion, app payload 10 bytes
+2026-05-16 19:01:21 | [AUTH] Paquet RQ_AuthenticateServerVersion (99) — resultat controle version.
+2026-05-16 19:01:21 | [UDP] -> sendto OK, 2 bytes (UDP frame)
+2026-05-16 19:01:21 | [PHASE] 4/5 — Reponse RQ_AuthenticateServerVersion (99) : champ long @offset 6 = 1 (1=OK, 0=refus version).
+2026-05-16 19:01:21 | [PHASE] 5/5 — **Pipeline auth termine** (equivalent `DlgState=6` / entree jeu cote client 1.68). Etapes suivantes jeu : persos (**RQ_GetPersonnalPClist = 26**), chargement monde — **non executes** dans ce port.
+2026-05-16 19:01:21 | [FINAL STEP] Authentification version serveur OK — pas de lancement jeu / monde.
+2026-05-16 19:01:21 | [NET] UDPAnalyseThread -> lpReadCallback (10 app bytes)
+2026-05-16 19:01:24 | [UDP] <- recvfrom raw 9 bytes (queued to packet thread)
+2026-05-16 19:01:24 | [UDP] post-decrypt hdr raw=0xB410 safe=0 lastFrag=0 rsv=0 pktID=5762 len=9 dataLen=6
+2026-05-16 19:01:24 | [UDP] payload head 6/6: 00 00 00 00 00 0A 
+2026-05-16 19:01:24 | [AUTH] <- opcode 10 (0x000A) (non documente client Linux), 6 bytes
+2026-05-16 19:01:24 | [NET] UDPAnalyseThread -> lpReadCallback (6 app bytes)
+2026-05-16 19:01:26 | [UDP] <- recvfrom raw 9 bytes (queued to packet thread)
+2026-05-16 19:01:26 | [UDP] post-decrypt hdr raw=0xB418 safe=0 lastFrag=0 rsv=0 pktID=5763 len=9 dataLen=6
+2026-05-16 19:01:26 | [UDP] payload head 6/6: 00 00 00 00 00 0A 
+2026-05-16 19:01:26 | [AUTH] <- opcode 10 (0x000A) (non documente client Linux), 6 bytes
+2026-05-16 19:01:26 | [NET] UDPAnalyseThread -> lpReadCallback (6 app bytes)
+2026-05-16 19:01:29 | [UDP] <- recvfrom raw 9 bytes (queued to packet thread)
+2026-05-16 19:01:29 | [UDP] post-decrypt hdr raw=0xB420 safe=0 lastFrag=0 rsv=0 pktID=5764 len=9 dataLen=6
+2026-05-16 19:01:29 | [UDP] payload head 6/6: 00 00 00 00 00 0A 
+2026-05-16 19:01:29 | [AUTH] <- opcode 10 (0x000A) (non documente client Linux), 6 bytes
+2026-05-16 19:01:29 | [NET] UDPAnalyseThread -> lpReadCallback (6 app bytes)
+2026-05-16 19:01:31 | [UDP] <- recvfrom raw 9 bytes (queued to packet thread)
+2026-05-16 19:01:31 | [UDP] post-decrypt hdr raw=0xB428 safe=0 lastFrag=0 rsv=0 pktID=5765 len=9 dataLen=6
+2026-05-16 19:01:31 | [UDP] payload head 6/6: 00 00 00 00 00 0A 
+2026-05-16 19:01:31 | [AUTH] <- opcode 10 (0x000A) (non documente client Linux), 6 bytes
+2026-05-16 19:01:31 | [NET] UDPAnalyseThread -> lpReadCallback (6 app bytes)

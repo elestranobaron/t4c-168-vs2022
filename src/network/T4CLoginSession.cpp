@@ -43,8 +43,8 @@ static sockaddr_in g_serverAddr{};
 /** 0 inactif, 1 en attente reponse RQ_RegisterAccount (14), 2 en attente RQ_AuthenticateServerVersion (99), 3 pipeline auth terminee ([FINAL STEP]). */
 static std::atomic<int> g_pipelineStep{0};
 
-/** Long version client pour RQ_AuthenticateServerVersion : doit egaler `TFCServer->dwVersion` cote serveur (souvent 168). */
-constexpr std::int32_t kTfcClientVersionLong = 168;
+/** Long opcode 99 : egale `TFCServer->dwVersion` (INI Version=14, pas le libelle produit « 1.68 »). Voir main.cpp : `Send << (long)Player.Version`. */
+constexpr std::int32_t kTfcClientVersionLong = 14;
 
 struct ParsedEndpoint {
     std::string host;
@@ -181,9 +181,8 @@ static std::vector<unsigned char> BuildRegisterAccountPacket(const std::string &
     v.push_back(static_cast<unsigned char>(pwd.size()));
     AppendTfcpayload(v, pwd);
 
-    /* Version client : le serveur RC Linux a le test « version == serveur » neutralisé (if(1)).
-     * Valeur 168 alignée sur la branche 1.68 du client d’origine (ajuster si le serveur impose autre chose). */
-    constexpr std::uint16_t kClientVersionHi = 168;
+    /* hi/lo version register (short BE) : meme sens que Player.Version / SERVER_CONNECTION_HI_VERSION (14). */
+    constexpr std::uint16_t kClientVersionHi = 14;
     constexpr std::uint16_t kClientVersionLo = 0;
     PushBeShort(v, kClientVersionHi);
     PushBeShort(v, kClientVersionLo);
