@@ -59,6 +59,9 @@ include_directories("${T4C_CLIENT_DIR}/UDP")
 # On indique au code qu'on est sous Linux pour désactiver les headers Windows indisponibles
 add_compile_definitions(LINUX_PORT)
 
+# --- Vue monde TnC (SDL3) ---
+include(${CMAKE_SOURCE_DIR}/cmake/TncGraphical.cmake)
+
 # --- LES SOURCES ---
 set(SOURCES
     src/main.cpp
@@ -76,12 +79,21 @@ set(SOURCES
     "${T4C_CLIENT_DIR}/UDP/Semaphore.cpp"
 )
 
+if(T4C_HAS_WORLD_VIEW)
+    list(APPEND SOURCES ${TNC_GRAPHICAL_SOURCES} ${TNC_GRAPHICAL_CLIENT_SOURCES})
+endif()
+
 # C'est ici que tu ajouteras TFCPacket.cpp, Comm.cpp, etc. au fur et à mesure
 
 # --- EXECUTABLE ---
 add_executable(t4c_client ${SOURCES})
 
 target_include_directories(t4c_client PRIVATE "${CMAKE_SOURCE_DIR}/CLIENT168_RC14h_OK/1.68RC14h/CryptMestoph")
+
+if(T4C_HAS_WORLD_VIEW)
+    target_include_directories(t4c_client BEFORE PRIVATE ${TNC_GRAPHICAL_INCLUDES})
+    target_compile_definitions(t4c_client PRIVATE T4C_HAS_WORLD_VIEW=1)
+endif()
 
 # --- LINKAGE DES LIBRARIES ---
 target_link_libraries(t4c_client PRIVATE SDL3::SDL3)
@@ -99,3 +111,34 @@ else()
 endif()
 
 target_link_libraries(t4c_client PRIVATE Threads::Threads m)
+
+find_package(ZLIB REQUIRED)
+if(T4C_HAS_WORLD_VIEW)
+    target_link_libraries(t4c_client PRIVATE ZLIB::ZLIB)
+    foreach(TNC_ASSET fonts modif_sprites.txt NPCList.txt torche.png LoadingScreen.bmp)
+        if(EXISTS "${TNC_GRAPHICAL_ROOT}/${TNC_ASSET}")
+            if(IS_DIRECTORY "${TNC_GRAPHICAL_ROOT}/${TNC_ASSET}")
+                add_custom_command(TARGET t4c_client POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory
+                        "${TNC_GRAPHICAL_ROOT}/${TNC_ASSET}"
+                        "$<TARGET_FILE_DIR:t4c_client>/${TNC_ASSET}"
+                )
+            else()
+                add_custom_command(TARGET t4c_client POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${TNC_GRAPHICAL_ROOT}/${TNC_ASSET}"
+                        "$<TARGET_FILE_DIR:t4c_client>/${TNC_ASSET}"
+                )
+            endif()
+        endif()
+    endforeach()
+    set(T4C_DATA_CANDIDATE "${CMAKE_SOURCE_DIR}/../client_graphical_sdl3_test/data")
+    if(EXISTS "${T4C_DATA_CANDIDATE}/sprites")
+        add_custom_command(TARGET t4c_client POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:t4c_client>/data"
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "${T4C_DATA_CANDIDATE}"
+                "$<TARGET_FILE_DIR:t4c_client>/data"
+        )
+    endif()
+endif()

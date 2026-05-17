@@ -23,7 +23,8 @@ class LoginScreen {
 
     explicit LoginScreen(SDL_Renderer *renderer);
 
-    void HandleEvent(const SDL_Event &event, SDL_Window *window);
+    /** false = quitter l'application (ex. Escape sur l'écran login). */
+    bool HandleEvent(const SDL_Event &event, SDL_Window *window);
 
     void Update();
 

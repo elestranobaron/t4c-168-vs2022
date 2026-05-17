@@ -1,6 +1,6 @@
 #ifndef LINUX_PORT
 
-//#include "pch.h" // steph dÿsactivation
+//#include "pch.h" // steph dÃ¿sactivation
 
 #pragma warning( disable : 4786 )
 #pragma warning( disable : 4291 )
@@ -8,7 +8,7 @@
 // Number used to enable Debug
 #define MAGIC_DEBUG_NUMBER   8030
 
-//#import "WebPatch.Exe" // DaP dÿsactivation
+//#import "WebPatch.Exe" // DaP dÃ¿sactivation
 // Include Files
 #include <windows.h>
 #include <shlobj.h>
@@ -19,7 +19,7 @@
 #include "DirectXInput.h"
 #include "Disp.h"
 #include "Ddraw.h"
-//#include "Effect.h" // steph dÿsactivation
+//#include "Effect.h" // steph dÃ¿sactivation
 #include <eh.h>
 #include "ExpFltr.h"
 #include "Fading.h"
@@ -99,7 +99,7 @@ static BOOL inGameTab = FALSE; // Verify si le Code de ALT-TAB est utiliser pour
 // ATL-TAB ou pour entrer dans le jeux.
 static BOOL bGetID = FALSE;	 // Stock de ALT-TAB que j'vas modifer 
 static DWORD dwGetID = 0;		 // Stock de ALT-TAB que j'vas modifier
-//int Tabbing = 1;					 // Le Tabbing c le nb de fois que t'a fait ALT-TAB //BLBLB 26 mars 2009 dÿsactivÿ ce truc outdated.
+//int Tabbing = 1;					 // Le Tabbing c le nb de fois que t'a fait ALT-TAB //BLBLB 26 mars 2009 dÃ¿sactivÃ¿ ce truc outdated.
 // Thread
 HANDLE hMaintenanceThread = NULL; // Ca sert a-peu-pres juste pour le alt-tab.
 extern DWORD TargetID;
@@ -444,7 +444,7 @@ void COMMCallBack(COMM_INTR_PROTOTYPE)
 		//g_App.LockPacketThread();
 		HandlePacket(Msg);// Handle Packet.
 		delete Msg;// Delete Message.
-		//g_App.UnlockPacketThread();//BLBL 08/12/2010 dÿplacÿ aprÿs le delete Msg
+		//g_App.UnlockPacketThread();//BLBL 08/12/2010 dÃ¿placÃ¿ aprÃ¿s le delete Msg
 	} 
 };
 
@@ -727,7 +727,7 @@ static long FAR PASCAL WindowMessageInput(
 			  int dwHitTestCode = LOWORD(lParam); 
 			  if(g_SaveGame.GetOptionsParam()->bLockResize && (dwHitTestCode >=10 && dwHitTestCode <=17))
 				  return FALSE;
-			  //int yPos = HIWORD(lParam); //BLBLBL 29 mars 2009 suppr. lignes inutilisÿe
+			  //int yPos = HIWORD(lParam); //BLBLBL 29 mars 2009 suppr. lignes inutilisÃ¿e
 			  if(dwHitTestCode == HTCLIENT  )
 			  {
 				  if(Custom.gWindowedSizing)
@@ -777,8 +777,8 @@ static long FAR PASCAL WindowMessageInput(
 				  //    g_App.SetError(1, g_LocalString[402]);
 				  //    g_App.Close(g_LocalString[402]);
 				  // KILL FOCUS BLOCK
-				  /*LOG << "* ALT = 1\r\n";           //BLBL: 26 mars tentative de rÿactivation du bloc
-				  if (!wParam && !g_boQuitApp) {	    //la rÿactivation est une catastrophe.
+				  /*LOG << "* ALT = 1\r\n";           //BLBL: 26 mars tentative de rÃ¿activation du bloc
+				  if (!wParam && !g_boQuitApp) {	    //la rÃ¿activation est une catastrophe.
 				  QuitFirstLoop = TRUE;
 				  if (hMaintenanceThread) {
                   if (hDrawThread) {
@@ -794,16 +794,16 @@ static long FAR PASCAL WindowMessageInput(
 		  {
 			  if(wParam == SC_MINIMIZE)
 			  {
-				  //            if(g_Var.inGame)//BLBL mÿme si on est pas encore INGAME !
+				  //            if(g_Var.inGame)//BLBL mÃ¿me si on est pas encore INGAME !
 				  //{
-				  g_Var.minimizeState = false;//BLBLBL test ÿ false tout le temps.
-				  //g_Var.tWaitFPSTime  = 1000/Custom.NMFPSValue;//BLBLBL on garde le mÿme taux de FSP tout le temps // steph dÿsactivation
+				  g_Var.minimizeState = false;//BLBLBL test Ã¿ false tout le temps.
+				  //g_Var.tWaitFPSTime  = 1000/Custom.NMFPSValue;//BLBLBL on garde le mÃ¿me taux de FSP tout le temps // steph dÃ¿sactivation
 				  //}
 			  }
 			  else// if(wParam == SC_MINIMIZE)
 			  {
 				  g_Var.minimizeState = false;
-				  //g_Var.tWaitFPSTime = 1000/Custom.NMFPSValue; // steph dÿsactivation
+				  //g_Var.tWaitFPSTime = 1000/Custom.NMFPSValue; // steph dÃ¿sactivation
 			  }
 		  }
 		  break;
@@ -843,7 +843,7 @@ static long FAR PASCAL WindowMessageInput(
 						  {
 							  if (lpDIMouseDevice) 
 							  {
-							  /*if (siGetSystemOS() == SI_WIN_NT_40)  //BLBLB 26 mars 2009 dÿsactivÿ ce truc outdated.
+							  /*if (siGetSystemOS() == SI_WIN_NT_40)  //BLBLB 26 mars 2009 dÃ¿sactivÃ¿ ce truc outdated.
 							  {
                               Tabbing+=2;
 							  }*/
@@ -891,7 +891,7 @@ static long FAR PASCAL WindowMessageInput(
 				  if ((!wParam || wParam == dwGetID) && !g_boQuitApp) {
 					  QuitFirstLoop = FALSE;
 					  if (hMaintenanceThread) {
-						  CTRL_State = 0; //indique que la touche control n'est pas enfoncÿe.
+						  CTRL_State = 0; //indique que la touche control n'est pas enfoncÃ¿e.
 					  }
 				  }
 				  // END SET FOCUS BLOCK
@@ -1078,8 +1078,8 @@ static long FAR PASCAL WindowMessageInput(
         } break;
         
         case 0x0109:
-			char Temp[100];//BLBLBL affichage en mode debug des lettres tapÿes pour chercher le pb avec le corÿen
-			sprintf(Temp, "WM_UNICHAR : %u\r\n", wParam);//BLBLBL affichage en mode debug des lettres tapÿes pour chercher le pb avec le corÿen
+			char Temp[100];//BLBLBL affichage en mode debug des lettres tapÃ¿es pour chercher le pb avec le corÃ¿en
+			sprintf(Temp, "WM_UNICHAR : %u\r\n", wParam);//BLBLBL affichage en mode debug des lettres tapÃ¿es pour chercher le pb avec le corÃ¿en
 			OutputDebugString( Temp );//BLBL affichage en fenetre log de ce qui est recu
 			break;
 		case WM_CHAR:
@@ -1094,13 +1094,13 @@ static long FAR PASCAL WindowMessageInput(
 					{
 						if (NoKey) 
 							break;
-						if ( !CTRL_State || ( isprint( wParam ) || ( wParam > 128 && wParam < 256 ) ) ) //BLBL info : saisie des caractÿres dans T4C, filtrage sur le paramÿtre d'entrÿe
+						if ( !CTRL_State || ( isprint( wParam ) || ( wParam > 128 && wParam < 256 ) ) ) //BLBL info : saisie des caractÃ¿res dans T4C, filtrage sur le paramÃ¿tre d'entrÃ¿e
 						{
 							if (INGAME) 
 							{
 								
-								char Temp[100];//BLBLBL affichage en mode debug des lettres tapÿes pour chercher le pb avec le corÿen
-								//	sprintf(Temp, "WM_CHAR : %u\r\n", wParam);//BLBLBL affichage en mode debug des lettres tapÿes pour chercher le pb avec le corÿen
+								char Temp[100];//BLBLBL affichage en mode debug des lettres tapÃ¿es pour chercher le pb avec le corÃ¿en
+								//	sprintf(Temp, "WM_CHAR : %u\r\n", wParam);//BLBLBL affichage en mode debug des lettres tapÃ¿es pour chercher le pb avec le corÃ¿en
 								//	OutputDebugString( Temp );//BLBL affichage en fenetre log de ce qui est recu
 								
 								if( RootBoxUI::GetInstance()->TextInput( wParam ) )
@@ -1113,7 +1113,7 @@ static long FAR PASCAL WindowMessageInput(
 								NoKey = true;
 							} 
 							
-							/*if ( !CTRL_State ) //BLBL bidouille ÿ chaotik pour lire les lettres sur 2 bytes :
+							/*if ( !CTRL_State ) //BLBL bidouille Ã¿ chaotik pour lire les lettres sur 2 bytes :
 							{
 							if (INGAME) 
 							{
@@ -1176,8 +1176,8 @@ static long FAR PASCAL WindowMessageInput(
 			{
 				if(g_Var.inGame)
 				{
-					//int caca = 1;//BLBLBL 29 mars 2009 suppr. lignes inutilisÿe
-					//int dwVal  = lParam;//BLBLBL 29 mars 2009 suppr. lignes inutilisÿe
+					//int caca = 1;//BLBLBL 29 mars 2009 suppr. lignes inutilisÃ¿e
+					//int dwVal  = lParam;//BLBLBL 29 mars 2009 suppr. lignes inutilisÃ¿e
 					
 					if(lParam == 0x6666/* || lParam == 0x1111*/)
 					{
@@ -1200,8 +1200,8 @@ static long FAR PASCAL WindowMessageInput(
 						g_Global.WriteClientConfig();
 						
 						
-						/*				  TFCPacket Send;//BLBLBL reprise du pak de dÿco finale
-						Send << (short)20;//qui apparement n'est jamais appellÿ dans app.cpp*/
+						/*				  TFCPacket Send;//BLBLBL reprise du pak de dÃ¿co finale
+						Send << (short)20;//qui apparement n'est jamais appellÃ¿ dans app.cpp*/
 						
 						//Fermeture d l'application :
 						g_App.Close(g_LocalString[403]);
@@ -1272,7 +1272,7 @@ int WINAPI WinMain
 	/* Custom.NMFPSValue     = pConfig->dwNMFPSValue;
 	if(Custom.NMFPSValue <1 || Custom.NMFPSValue > 25)
 		Custom.NMFPSValue = 17;
-	g_Var.tWaitFPSTime     = 1000/Custom.NMFPSValue; */ // steph dÿsactivation
+	g_Var.tWaitFPSTime     = 1000/Custom.NMFPSValue; */ // steph dÃ¿sactivation
 	Custom.TakeScreenShot  = 0;
 	
 	
@@ -1281,7 +1281,7 @@ int WINAPI WinMain
 	Custom.bEnableGameRain  = false; 
 	Custom.bEnableCArrow    = FALSE;
 	
-	//Custom.Debug = true; //BLBLBL 26 mars : mode dÿbug activÿ.
+	//Custom.Debug = true; //BLBLBL 26 mars : mode dÃ¿bug activÃ¿.
 	
 	//NMNMNM
 	//Custom.gWebPatchEnabled = true;//pConfig->WebpatchEnable;        
@@ -1290,7 +1290,7 @@ int WINAPI WinMain
 #ifdef _DEBUG
 	Custom.gWebPatchEnabled = false;//pConfig->WebpatchEnable;        
 #else
-	Custom.gWebPatchEnabled = true;//pConfig->WebpatchEnable; // steph ATTENTION ÿ ne pas false en production !
+	Custom.gWebPatchEnabled = true;//pConfig->WebpatchEnable; // steph ATTENTION Ã¿ ne pas false en production !
 #endif
 	
 	//Custom.gWebPatchEnabled = false;
@@ -1300,7 +1300,7 @@ int WINAPI WinMain
 	g_TimeStat.SetThreadIDName(GetCurrentThreadId(), "Message Thread");
 	
 	// TRY to Update DLL patchw32.DLL
-	//CopyFile("NEWDLL.DLL", "PATCHW32.DLL", FALSE);//BLBLBL ?? sert ÿ quoi ÿa !?
+	//CopyFile("NEWDLL.DLL", "PATCHW32.DLL", FALSE);//BLBLBL ?? sert Ã¿ quoi Ã¿a !?
 	
 	// Set the Exception handler.
 	CExpFltr &ExpFltr = CExpFltr::GetInstance();
@@ -1401,13 +1401,13 @@ int WINAPI WinMain
 	if(dwQuitCnt>=50)
 	{
 		OutputDebugString( "\r\n***********Pas eu le temps de fermer.....\n\n\n" );
-		RemoveFontResource("t4cbeaulieuxv2.ttf"); // steph Fonts\\ retirÿ
+		RemoveFontResource("t4cbeaulieuxv2.ttf"); // steph Fonts\\ retirÃ¿
 		exit(5678);
 		
 	}
 	g_boWaitForShutdown = 0;
 	OutputDebugString( "\r\nClosing app.\n\n\n" );
-	RemoveFontResource("t4cbeaulieuxv2.ttf"); // steph Fonts\\ retirÿ
+	RemoveFontResource("t4cbeaulieuxv2.ttf"); // steph Fonts\\ retirÃ¿
 	Sleep(500);
 	siRelease();
 	Sleep(500);
@@ -1523,11 +1523,11 @@ CombatCursorVSF AttackCursorIcon;
 
 //++NMNMNM [NEW GUI CV2Sprite Sprite]
 CV2Sprite    Intro[NM_CONNECT_SCREEN_NBR_BACK_ANIM];
-//CV2Sprite    Connect_D_Anim[36]; // steph dÿsactivation
+//CV2Sprite    Connect_D_Anim[36]; // steph dÃ¿sactivation
 //CV2Sprite    Connect_Title;
 CV2Sprite    Connect_Title2;
 /* CV2Sprite    Connect_D;
-CV2Sprite    Connect_V; */ // steph dÿsactivation
+CV2Sprite    Connect_V; */ // steph dÃ¿sactivation
 CV2Sprite    Connect_Main_Back;
 CV2Sprite    Connect_Main_BtnN;
 CV2Sprite    Connect_Main_BtnD;
@@ -1571,7 +1571,7 @@ UINT WINAPI SocketFunction(LPVOID pParam)
 	TFCPacket *Msg;
 	BOOL NotRegister = TRUE;
 	WORD Type;
-	DWORD Round = 1;//BLBLBL annulation modif, on sait pas si ÿa change qq chose ou pas//BLBLBL 29 mars 2009 suppr. lignes inutilisÿe
+	DWORD Round = 1;//BLBLBL annulation modif, on sait pas si Ã¿a change qq chose ou pas//BLBLBL 29 mars 2009 suppr. lignes inutilisÃ¿e
 	BOOL boMsgDay = FALSE;
 	
 	COMM.State = 1;
@@ -1603,7 +1603,7 @@ UINT WINAPI SocketFunction(LPVOID pParam)
 			}
 		}
 		
-		Sleep(5); //BLBLBL 25 mars 2009 de 15 ÿ 5 pour voir.
+		Sleep(5); //BLBLBL 25 mars 2009 de 15 Ã¿ 5 pour voir.
 		COMM.Lock();
 		int Len = COMM.Receive(Msg);
 		COMM.Unlock();
@@ -1692,12 +1692,12 @@ UINT WINAPI SocketFunction(LPVOID pParam)
 		{
 			LastTry = timeGetTime();
 			TryNb++;
-			if (TryNb == 4)//rÿduction du nombre d'essais ÿ 5 (5 secondes) ÿa permet de rÿÿssayer plus rapidement. // steph 4 au lieu de 5
+			if (TryNb == 4)//rÃ¿duction du nombre d'essais Ã¿ 5 (5 secondes) Ã¿a permet de rÃ¿Ã¿ssayer plus rapidement. // steph 4 au lieu de 5
 			{
 				DlgState = 4;
 			}
 			
-			if (TryNb <= 1)  //BLBLBL un truc louche ÿ regarder ici ! cette condition me semble foireuse vis ÿ vis de la boucle
+			if (TryNb <= 1)  //BLBLBL un truc louche Ã¿ regarder ici ! cette condition me semble foireuse vis Ã¿ vis de la boucle
 			{
 				OutputDebugString("Send Registration\r\n");
 				sprintf(g_strGeneralMessage,g_GUILocalString[170]);
@@ -2055,7 +2055,7 @@ void InitializeTFCData(void)
 	}
 	LOG << "15, ";*/
 	
-	//unsigned char CodeC[5] = { 120, 87, 123, 98, 8 };//BLBLBL 29 mars 2009 suppr. lignes inutilisÿe
+	//unsigned char CodeC[5] = { 120, 87, 123, 98, 8 };//BLBLBL 29 mars 2009 suppr. lignes inutilisÃ¿e
 	
 	LOG << "16, ";
 	
@@ -2063,7 +2063,7 @@ void InitializeTFCData(void)
 	LOG << "17, ";
 	char Temp[100];
 	UINT i; // DaP ajout
-	for (i = 0; i < strlen(ServerIP); i++) { // DaP UINT retirÿ
+	for (i = 0; i < strlen(ServerIP); i++) { // DaP UINT retirÃ¿
         Temp[i] = ServerIP[i];
 	}
 	Temp[i] = 0;
@@ -2745,7 +2745,7 @@ void InitializeTFCData(void)
      {
 		 //Isp.PCX for 800 or 1024...
 		 char strISPName[20];
-		 sprintf(strISPName,"%d.PCX", g_Global.GetScreenH()); // steph ISP retirÿ // steph H ScreenH au lieu de ScreenW
+		 sprintf(strISPName,"%d.PCX", g_Global.GetScreenH()); // steph ISP retirÃ¿ // steph H ScreenH au lieu de ScreenW
 		 hrLoading = diLoading.LoadImage(strISPName,g_Global.GetScreenW(),g_Global.GetScreenH());
 		 if (hrLoading) 
 		 {
@@ -2755,7 +2755,7 @@ void InitializeTFCData(void)
 		 }
      } catch (...) 
      {
-		 LOG << "* WRN = PCX\r\n"; // steph ISP. retirÿ
+		 LOG << "* WRN = PCX\r\n"; // steph ISP. retirÃ¿
      };
 	 
      g_bFirstLoadComplete = FALSE;
@@ -2770,9 +2770,9 @@ void InitializeTFCData(void)
 		 Sleep(100);
      }
 	 
-	 Sleep(1500);//on laisse le message did you know 2 secondes de plus ÿ l'ÿcran // steph 1500 au lieu de 2000
+	 Sleep(1500);//on laisse le message did you know 2 secondes de plus Ã¿ l'Ã¿cran // steph 1500 au lieu de 2000
 	 
-     if(hrLoading != NULL)//BLBLBL 29 mars 2009 vÿrification pointeur initialisÿ
+     if(hrLoading != NULL)//BLBLBL 29 mars 2009 vÃ¿rification pointeur initialisÃ¿
 		 diLoading.Release();
      
      // Loading Game Font.
@@ -2801,7 +2801,7 @@ void InitializeTFCData(void)
      /* World.SetWorldFileName   ("Game Files\\V2_LeoWorld.Map");
      World.SetWorldFileName   ("Game Files\\V2_Extension01.Map");
      World.SetWorldFileName   ("Game Files\\V2_Extension02.Map");
-     World.SetWorldFileName   ("Game Files\\V2_Extension03.Map"); */ // steph dÿsactivation
+     World.SetWorldFileName   ("Game Files\\V2_Extension03.Map"); */ // steph dÃ¿sactivation
      World.CreateView();
 	 
 
@@ -2902,7 +2902,7 @@ void InitializeTFCData(void)
      g_Var.vsfProgressT.CreateSprite("EnterProgressTick");
      g_Var.vsfMapZone  .CreateSprite("MapZoneDisplay");
      g_Var.vsfCode[0]  .CreateSprite("Alpha");
-     g_Var.vsfCode[1]  .CreateSprite("Bÿta");
+     g_Var.vsfCode[1]  .CreateSprite("BÃ¿ta");
      g_Var.vsfCode[2]  .CreateSprite("Gamma");
      g_Var.vsfCode[3]  .CreateSprite("Delta");
      g_Var.vsfCode[4]  .CreateSprite("Epsilon");
@@ -2941,12 +2941,12 @@ void InitializeTFCData(void)
      {
 		 sprintf(strNameTmp,"logo36000%02d",aa);
 		 Connect_D_Anim[aa].LoadSprite(strNameTmp);
-     } */ // steph dÿsactivation
+     } */ // steph dÃ¿sactivation
 	 
-	 Connect_Title2    .LoadSprite(""); // steph Connect_Title2 retirÿ
+	 Connect_Title2    .LoadSprite(""); // steph Connect_Title2 retirÃ¿
      /* Connect_D         .LoadSprite("Connect2_Rebirth");
 	 
-     Connect_V         .LoadSprite("Connect2_Vircom"); */ // steph dÿsactivation
+     Connect_V         .LoadSprite("Connect2_Vircom"); */ // steph dÃ¿sactivation
      Connect_Main_Back .LoadSprite("Connect_Main_Back");
      Connect_Main_BtnN .LoadSprite("Connect_Main_BtnN");
      Connect_Main_BtnD .LoadSprite("Connect_Main_BtnD");
@@ -3145,7 +3145,7 @@ void ParseText(char *pText)
 		{
 			g_bRunCommand = TRUE;
 			sprintf(g_szFileName,"%s",strtok(NULL, " "));
-			_beginthread(RunCommandThread, 0, NULL ); */ // steph dÿsactivation
+			_beginthread(RunCommandThread, 0, NULL ); */ // steph dÃ¿sactivation
 			/*
 			char *szFileName = strtok(NULL, " ");
 			
@@ -3188,7 +3188,7 @@ void ParseText(char *pText)
 		
 		else if (!stricmp(szCmd, "!SPELL"))// && Player.CanRunScripts && Custom.gWebPatchEnabled == FALSE)
 		{
-			char *spellId = strtok(NULL, " "); */ // steph dÿsactivation
+			char *spellId = strtok(NULL, " "); */ // steph dÃ¿sactivation
 			/*
 			char *posX	= strtok(NULL, " "),
 			*posY	= strtok(NULL, " "),
@@ -3220,7 +3220,7 @@ void ParseText(char *pText)
 		sending << (long)0;
 
         SEND_PACKET( sending );
-		  } */ // steph dÿsactivation
+		  } */ // steph dÃ¿sactivation
 		
 		
 		else if (!stricmp(szCmd, "!AFK")) 
@@ -3293,7 +3293,7 @@ void ParseText(char *pText)
 		}
 		else if (!stricmp(szCmd, "!FPS") /*&& Player.CanRunScripts*/) 
 		{
-			//char *szFPSTime = strtok(NULL, " ");//BLBLBL 29 mars 2009 suppr. lignes inutilisÿe
+			//char *szFPSTime = strtok(NULL, " ");//BLBLBL 29 mars 2009 suppr. lignes inutilisÃ¿e
 			
 			
 			/*if(szFPSTime)
@@ -3654,7 +3654,7 @@ void WebPatchUpdate(char *lpszPath, char *lpszIP, char *lpszUser, char *lpszPass
       }
       
       // SHUTDOWN WEBPATCH
-      int iErrorCode=0;//BLBL 29 mars 2009 initialisation de la variable ÿ 0
+      int iErrorCode=0;//BLBL 29 mars 2009 initialisation de la variable Ã¿ 0
       int i = 0; // DaP ajout de int
       if (bWebPatchUpdate) {
 		  HANDLE hP = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, lProcID);
@@ -3811,11 +3811,11 @@ void DrawFisrtLoadingText()
 	//char *Text3 = new char [100];
 	
 	strcpy(Text, g_LocalString[9]);
-	//strcat(Text, ": "); // steph dÿsactivation
+	//strcat(Text, ": "); // steph dÃ¿sactivation
 	strcat(Text, g_LocalString[605]); // steph ajout
 	strcat(Text, g_LocalString[10]);
 	
-	//int dwCnt = 0;//BLBLBL 29 mars 2009 suppr. lignes inutilisÿe
+	//int dwCnt = 0;//BLBLBL 29 mars 2009 suppr. lignes inutilisÃ¿e
 	/*for(int i=0;i<dwCntFLT;i+=2)
 	{
 	Text3[i+0] = '.';
@@ -3909,10 +3909,10 @@ void ExitThreadGame(LPVOID pParam)
 {
 	
 	
-	boInterruptLogoff=FALSE;//par dÿfaut on n'est pas interrompu quand on lance la dÿco, att ces variables doivent ÿtre en dÿbut de fonction car modifiÿe par un thread dÿclenchÿ aprÿs l'envoie du pak.
-	boForceLogoff=FALSE;//par dÿfaut on n'est pas interrompu quand on lance la dÿco
+	boInterruptLogoff=FALSE;//par dÃ¿faut on n'est pas interrompu quand on lance la dÃ¿co, att ces variables doivent Ã¿tre en dÃ¿but de fonction car modifiÃ¿e par un thread dÃ¿clenchÃ¿ aprÃ¿s l'envoie du pak.
+	boForceLogoff=FALSE;//par dÃ¿faut on n'est pas interrompu quand on lance la dÃ¿co
 	
-	//BLBLBL : on envoie la notification comme quoi le client commence le dÿcompte
+	//BLBLBL : on envoie la notification comme quoi le client commence le dÃ¿compte
 	TFCPacket Send;
 	LOG << "\r\nSending code 123 (safeplug).";
 	Send << (short)RQ_SafePlug;
@@ -3927,7 +3927,7 @@ void ExitThreadGame(LPVOID pParam)
 	for(int i=15;i>0;i--) //NADNADNAD
 	{
 		if (boInterruptLogoff||boForceLogoff) {
-			break;//si on est interrompu on sort du dÿcompte
+			break;//si on est interrompu on sort du dÃ¿compte
 		}
 		sprintf( strMessage, g_GUILocalString[169], i );
 		ChatterUI::GetInstance()->AddBackscrollItem("",strMessage, RGB(255,180,0), true);
@@ -3936,7 +3936,7 @@ void ExitThreadGame(LPVOID pParam)
 	
 	if (boInterruptLogoff){
 		
-		g_bExitComplete = false;//on indique au GUI client que la sortie du jeu a ÿtÿ annulÿe
+		g_bExitComplete = false;//on indique au GUI client que la sortie du jeu a Ã¿tÃ¿ annulÃ¿e
 		ChatterUI::GetInstance()->AddBackscrollItem("", g_GUILocalString[221], RGB(255,0,0), true);
 		
 	}else if (boForceLogoff){
@@ -3991,6 +3991,16 @@ void RunCommandThread(LPVOID pParam)
 #include "gui/LoginScreen.h"
 #include "network/T4CLoginSession.h"
 
+#if T4C_HAS_WORLD_VIEW
+#include "game/GameWorldScreen.h"
+#endif
+
+namespace {
+
+enum class AppPhase { Login, World };
+
+}  // namespace
+
 int main(int argc, char *argv[])
 {
     (void)argc;
@@ -4022,36 +4032,99 @@ int main(int argc, char *argv[])
     LoginScreen login(renderer);
     SDL_StartTextInput(window);
 
+    AppPhase phase = AppPhase::Login;
+#if T4C_HAS_WORLD_VIEW
+    GameWorldScreen world;
+#endif
+
     bool running = true;
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {
                 running = false;
-            } else {
-                login.HandleEvent(event, window);
+                break;
             }
+            if (phase == AppPhase::Login) {
+                if (!login.HandleEvent(event, window)) {
+                    running = false;
+                }
+            }
+#if T4C_HAS_WORLD_VIEW
+            else {
+                world.HandleEvent(event);
+                if (world.ConsumeReturnToLogin()) {
+                    T4CLoginSessionDisconnectInGame();
+                    world.Shutdown();
+                    T4CLoginSessionResetAfterReturnToLogin();
+                    phase = AppPhase::Login;
+                    SDL_SetWindowTitle(window, "T4C (Linux SDL3)");
+                    SDL_SetRenderLogicalPresentation(renderer,
+                                                     LoginScreen::kLogicalWidth,
+                                                     LoginScreen::kLogicalHeight,
+                                                     SDL_LOGICAL_PRESENTATION_LETTERBOX);
+                    SDL_StartTextInput(window);
+                    SDL_Log("[main] Retour ecran login (Esc depuis le monde).");
+                }
+            }
+#endif
         }
 
-        login.Update();
-
-        if (T4CLoginSessionConsumeNetworkSuccessDialog()) {
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "T4C — reseau",
-                                     "Etape atteinte : le serveur a envoye la liste des personnages "
-                                     "(RQ_GetPersonnalPClist). Le compte et le fil UDP sont valides.\n\n"
-                                     "Le client Linux s'arrete ici : le chargement du monde et le moteur graphique "
-                                     "(DirectX d'origine) ne sont pas portes en SDL3 dans cette build.",
-                                     window);
+        if (!running) {
+            break;
         }
 
-        SDL_SetRenderDrawColor(renderer, 18, 20, 26, 255);
-        SDL_RenderClear(renderer);
-        login.Render(renderer);
-        SDL_RenderPresent(renderer);
+        if (phase == AppPhase::Login) {
+            login.Update();
 
-        SDL_Delay(16);
+            if (T4CLoginSessionConsumeNetworkSuccessDialog()) {
+#if T4C_HAS_WORLD_VIEW
+                SDL_StopTextInput(window);
+                if (world.Init(renderer, window)) {
+                    phase = AppPhase::World;
+                    SDL_SetWindowTitle(window, "T4C â€” monde (SDL3)");
+                    SDL_SetRenderLogicalPresentation(renderer,
+                                                     GameWorldScreen::kLogicalWidth,
+                                                     GameWorldScreen::kLogicalHeight,
+                                                     SDL_LOGICAL_PRESENTATION_LETTERBOX);
+                    SDL_Log("[main] Passage en vue monde apres auth reseau.");
+                } else {
+                    SDL_ShowSimpleMessageBox(
+                        SDL_MESSAGEBOX_WARNING, "T4C â€” monde",
+                        (world.GetLastError() +
+                         "\n\nReseau OK ; definissez T4C_DATA ou convertissez les Game Files.")
+                            .c_str(),
+                        window);
+                    SDL_StartTextInput(window);
+                }
+#else
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "T4C â€” reseau",
+                                         "Auth reseau OK (liste persos). Vue monde non compilee "
+                                         "(TNC_GRAPHICAL_ROOT manquant).",
+                                         window);
+#endif
+            }
+
+            SDL_SetRenderDrawColor(renderer, 18, 20, 26, 255);
+            SDL_RenderClear(renderer);
+            login.Render(renderer);
+            SDL_RenderPresent(renderer);
+        }
+#if T4C_HAS_WORLD_VIEW
+        else {
+            world.Update();
+            SDL_Delay(5);
+        }
+#endif
+
+        if (phase == AppPhase::Login) {
+            SDL_Delay(16);
+        }
     }
 
+#if T4C_HAS_WORLD_VIEW
+    world.Shutdown();
+#endif
     T4CLoginSessionShutdown();
 
     SDL_DestroyRenderer(renderer);

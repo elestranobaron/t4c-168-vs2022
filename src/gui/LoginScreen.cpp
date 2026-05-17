@@ -164,6 +164,32 @@ void LoginScreen::tryConnect(SDL_Window *window) {
     }
 
 #if defined(LINUX_PORT)
+    T4CLoginSessionPollBackgroundTasks();
+    if (T4CLoginSessionIsLogoutInProgress()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "[LoginScreen] Deconnexion en cours (~15 s apres sortie du monde) — attendez le message "
+                    "\"Deconnexion arriere-plan terminee\" dans la console reseau.");
+        return;
+    }
+    {
+        const int cooldown = T4CLoginSessionGetReconnectCooldownSeconds();
+        if (cooldown > 0) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "[LoginScreen] Reconnexion dans ~%d s (le serveur libere encore la session precedente).",
+                        cooldown);
+            return;
+        }
+    }
+    if (T4CLoginSessionIsNetworkActive()) {
+        T4CLoginSessionAbortLogin();
+        const int afterAbort = T4CLoginSessionGetReconnectCooldownSeconds();
+        if (afterAbort > 0) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "[LoginScreen] Compte encore occupe cote serveur — attendez ~%d s avant un nouveau Connect.",
+                        afterAbort);
+            return;
+        }
+    }
     SDL_Log("[LoginScreen] Connexion demandee - IP=\"%s\" port=\"%s\" login_len=%zu password_len=%zu", ipStr_.c_str(),
             portSave.c_str(), loginStr_.size(), passwordStr_.size());
     if (!T4CLoginSessionStart(ipStr_, portSave, loginStr_, passwordStr_)) {
@@ -181,7 +207,7 @@ void LoginScreen::refreshMatrixLogLines() {
 #endif
 }
 
-void LoginScreen::HandleEvent(const SDL_Event &event, SDL_Window *window) {
+bool LoginScreen::HandleEvent(const SDL_Event &event, SDL_Window *window) {
     SDL_Event ev = event;
     switch (event.type) {
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
@@ -189,7 +215,7 @@ void LoginScreen::HandleEvent(const SDL_Event &event, SDL_Window *window) {
                 SDL_ConvertEventToRenderCoordinates(renderer_, &ev);
             }
             if (!ev.button.down || ev.button.button != SDL_BUTTON_LEFT) {
-                return;
+                return true;
             }
             const float mx = ev.button.x;
             const float my = ev.button.y;
@@ -199,49 +225,52 @@ void LoginScreen::HandleEvent(const SDL_Event &event, SDL_Window *window) {
                 if (window) {
                     SDL_StartTextInput(window);
                 }
-                return;
+                return true;
             }
             if (PointInRect(mx, my, portFieldRect_)) {
                 activeField_ = LoginActiveField::Port;
                 if (window) {
                     SDL_StartTextInput(window);
                 }
-                return;
+                return true;
             }
             if (PointInRect(mx, my, loginFieldRect_)) {
                 activeField_ = LoginActiveField::Login;
                 if (window) {
                     SDL_StartTextInput(window);
                 }
-                return;
+                return true;
             }
             if (PointInRect(mx, my, passwordFieldRect_)) {
                 activeField_ = LoginActiveField::Password;
                 if (window) {
                     SDL_StartTextInput(window);
                 }
-                return;
+                return true;
             }
             if (PointInRect(mx, my, connectButtonRect_)) {
                 tryConnect(window);
-                return;
+                return true;
             }
             activeField_ = LoginActiveField::None;
-            return;
+            return true;
         }
 
         case SDL_EVENT_TEXT_INPUT: {
             appendTextInput(event.text.text);
-            return;
+            return true;
         }
 
         case SDL_EVENT_KEY_DOWN: {
             if (event.key.scancode == SDL_SCANCODE_BACKSPACE && event.key.down) {
                 applyBackspace();
-                return;
+                return true;
             }
             if (!event.key.down || event.key.repeat) {
-                return;
+                return true;
+            }
+            if (event.key.key == SDLK_ESCAPE) {
+                return false;
             }
             if (event.key.scancode == SDL_SCANCODE_TAB) {
                 switch (activeField_) {
@@ -264,17 +293,20 @@ void LoginScreen::HandleEvent(const SDL_Event &event, SDL_Window *window) {
                 if (window) {
                     SDL_StartTextInput(window);
                 }
-                return;
+                return true;
             }
-            return;
+            return true;
         }
 
         default:
-            return;
+            return true;
     }
 }
 
 void LoginScreen::Update() {
+#if defined(LINUX_PORT)
+    T4CLoginSessionPollBackgroundTasks();
+#endif
     refreshMatrixLogLines();
 }
 
