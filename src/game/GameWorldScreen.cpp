@@ -1,6 +1,7 @@
 #include "game/GameWorldScreen.h"
 
 #include "game/TncDataPaths.h"
+#include "network/T4CLoginSession.h"
 #include "render/Sdl3FramePresenter.h"
 
 #include <SDL3/SDL.h>
@@ -53,7 +54,7 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
     if (dataRoot_.empty()) {
         lastError_ =
             "Donnees T4C introuvables (sprites/maps).\n"
-            "Definissez T4C_DATA ou lancez convert2 (voir client_graphical_sdl3_test).";
+            "Definissez T4C_DATA ou ./scripts/assemble_t4c_data.sh (client/data/).";
         return false;
     }
 
@@ -79,18 +80,31 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
         return false;
     }
 
+    const std::string fontMain = T4CDataPath("fonts/font_trebuchet_12");
+    const std::string fontUi = T4CDataPath("fonts/sans_bold_12");
+    const std::string npcList = T4CDataPath("NPCList.txt");
+    const std::string torchePath = T4CDataPath("torche.png");
+
     fm_ = new FontManager();
-    if (!fm_->load_font(DupCStr("fonts/font_trebuchet_12"))) {
-        lastError_ = "Police fonts/font_trebuchet_12 introuvable (cwd = repertoire executable).";
+    if (fontMain.empty() || !fm_->load_font(DupCStr(fontMain))) {
+        lastError_ = "Police introuvable sous T4C_DATA/fonts/ (font_trebuchet_12).";
         Shutdown();
         return false;
     }
 
     fm2_ = new FontManager();
-    fm2_->load_font(DupCStr("fonts/sans_bold_12"));
+    if (!fontUi.empty()) {
+        fm2_->load_font(DupCStr(fontUi));
+    }
 
-    const std::string spritesPath = spritesDir + "/";
-    const std::string mapsPath = mapsDir + "/";
+    std::string spritesPath = spritesDir;
+    std::string mapsPath = mapsDir;
+    if (!spritesPath.empty() && spritesPath.back() != '/') {
+        spritesPath += '/';
+    }
+    if (!mapsPath.empty() && mapsPath.back() != '/') {
+        mapsPath += '/';
+    }
 
     vsfi_ = new VSFInterface(DupCStr(spritesPath));
     mapi_ = new MAPInterface(DupCStr(mapsPath), vsfi_);
@@ -98,14 +112,21 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
     txtm_ = new TextManager(fm2_);
     txtm_->add_color_text_at_pos(DupCStr("T4C — monde (SDL3)"), 380, 300, 5, 0xBBCC6699);
 
-    npcm_ = new NPCManager(DupCStr("NPCList.txt"), vsfi_);
+    if (npcList.empty()) {
+        lastError_ = "NPCList.txt introuvable sous T4C_DATA.";
+        Shutdown();
+        return false;
+    }
+    npcm_ = new NPCManager(DupCStr(npcList), vsfi_);
     npcm_->ajout_npc(0, DupCStr("CentaurWarrior"), locX_, locY_, 135);
     npcm_->set_action(0, 'D');
     npcm_->move_to(0, locX_ - 5, locY_ - 5, 15);
 
-    if (SDL_Surface *torche = IMG_Load("torche.png")) {
-        SDL_BlitSurface(torche, nullptr, env_, nullptr);
-        SDL_DestroySurface(torche);
+    if (!torchePath.empty()) {
+        if (SDL_Surface *torche = IMG_Load(torchePath.c_str())) {
+            SDL_BlitSurface(torche, nullptr, env_, nullptr);
+            SDL_DestroySurface(torche);
+        }
     }
     SDL_SetAlpha(env_, SDL_SRCALPHA, 0);
 
@@ -195,6 +216,7 @@ void GameWorldScreen::Update() {
     if (!ready_) {
         return;
     }
+    T4CLoginSessionPollBackgroundTasks();
     redraw();
 }
 

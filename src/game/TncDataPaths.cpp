@@ -39,11 +39,10 @@ std::string ResolveT4CDataRoot() {
         candidates.push_back(exeDir / "data");
         candidates.push_back(exeDir / ".." / "data");
         candidates.push_back(exeDir / ".." / ".." / "data");
-        candidates.push_back(exeDir / ".." / ".." / ".." / "client_graphical_sdl3_test" / "data");
     }
 
     candidates.push_back(fs::current_path() / "data");
-    candidates.push_back(fs::current_path() / ".." / "client_graphical_sdl3_test" / "data");
+    candidates.push_back(fs::current_path() / "build" / "data");
 
     for (const fs::path &c : candidates) {
         std::error_code ec;

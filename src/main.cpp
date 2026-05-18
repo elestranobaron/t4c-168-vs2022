@@ -4141,6 +4141,7 @@ int main(int argc, char *argv[])
         }
 #if T4C_HAS_WORLD_VIEW
         else {
+            T4CLoginSessionPollBackgroundTasks();
             world.Update();
             SDL_Delay(5);
         }

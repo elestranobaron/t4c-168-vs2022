@@ -5,6 +5,12 @@ x64/
 x86/
 build/
 
+# Assets runtime copiés (~300 Mo) — voir data/README.md et scripts/assemble_t4c_data.sh
+/data/sprites/
+/data/maps/
+/data/sons/
+/data/fonts/
+
 # --- Artefacts Visual Studio ---
 .vs/
 *.sdf

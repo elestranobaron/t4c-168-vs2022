@@ -91,3 +91,19 @@ Tests de référence : compte `test` / perso `TestPlayer`, serveur `T4C_Server_L
 #### `src/…`
 …
 ```
+
+## [2026-05-19] - Améliorations Assets & Pipeline Réseau Réduite
+### Ajouté
+- **Système d'Assets Local (`client/data/`)** : Migration complète vers un répertoire de données unifié (`sprites/`, `maps/`, `sons/`, `fonts/`, `NPCList.txt`) supprimant la dépendance absolue envers les liens externes `client_graphical_path_to_follow`.
+- **Script d'automatisation (`scripts/assemble_t4c_data.sh`)** : Permet la régénération et la copie automatique du dossier `data/` depuis l'environnement de développement graphique source.
+- **Documentation locale (`data/README.md`)** : Ajout du contrat d'utilisation et de la structure requise pour le répertoire de données client.
+
+### Modifié
+- **Build & CMakeLists** : Génération automatisée d'un lien symbolique `build/data` pointant vers `${CMAKE_SOURCE_DIR}/data`. Plus aucune copie brute des polices ou de `NPCList.txt` n'est effectuée à côté du binaire.
+- **Détection des Dépendances (`cmake/TncGraphical.cmake`)** : Détection dynamique et transparente de `TnC_dev` (recherche du chemin graphique en priorité avant le fallback de test).
+- **GameWorldScreen & TncDataPaths** : Utilisation stricte de la macro-fonction `T4CDataPath()` pour localiser les ressources. Nettoyage des doubles slashes (`//`) dans la construction des chemins de sprites.
+- **Boucle Principale (`main.cpp`)** : Intégration et exécution continue de `T4CLoginSessionPollBackgroundTasks()` en tâche de fond une fois la phase Monde active.
+- **Suivi de Phase Réseau (`T4CLoginSession`)** : Intégration de verrous logiques (`g_waitingFromPreInGame`, `GetWorldHudLine()`) pour tracer précisément l'envoi de l'Opcode 46 et intercepter ses codes de retour.
+
+### Sécurité
+- Mise à jour du `.gitignore` pour ignorer explicitement les volumineux sous-dossiers de données (`sprites/`, `maps/`, `sons/`) afin d'éviter tout commit accidentel d'assets volumineux (~325 Mo).

@@ -116,30 +116,15 @@ target_link_libraries(t4c_client PRIVATE Threads::Threads m)
 find_package(ZLIB REQUIRED)
 if(T4C_HAS_WORLD_VIEW)
     target_link_libraries(t4c_client PRIVATE ZLIB::ZLIB)
-    foreach(TNC_ASSET fonts modif_sprites.txt NPCList.txt torche.png LoadingScreen.bmp)
-        if(EXISTS "${TNC_GRAPHICAL_ROOT}/${TNC_ASSET}")
-            if(IS_DIRECTORY "${TNC_GRAPHICAL_ROOT}/${TNC_ASSET}")
-                add_custom_command(TARGET t4c_client POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_directory
-                        "${TNC_GRAPHICAL_ROOT}/${TNC_ASSET}"
-                        "$<TARGET_FILE_DIR:t4c_client>/${TNC_ASSET}"
-                )
-            else()
-                add_custom_command(TARGET t4c_client POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${TNC_GRAPHICAL_ROOT}/${TNC_ASSET}"
-                        "$<TARGET_FILE_DIR:t4c_client>/${TNC_ASSET}"
-                )
-            endif()
-        endif()
-    endforeach()
-    set(T4C_DATA_CANDIDATE "${CMAKE_SOURCE_DIR}/../client_graphical_sdl3_test/data")
-    if(EXISTS "${T4C_DATA_CANDIDATE}/sprites")
+    set(T4C_DATA_ROOT "${CMAKE_SOURCE_DIR}/data")
+    if(EXISTS "${T4C_DATA_ROOT}/sprites" AND EXISTS "${T4C_DATA_ROOT}/maps")
         add_custom_command(TARGET t4c_client POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:t4c_client>/data"
             COMMAND ${CMAKE_COMMAND} -E create_symlink
-                "${T4C_DATA_CANDIDATE}"
+                "${T4C_DATA_ROOT}"
                 "$<TARGET_FILE_DIR:t4c_client>/data"
         )
+    else()
+        message(WARNING "client/data/ absent (sprites+maps) — lancez scripts/assemble_t4c_data.sh")
     endif()
 endif()

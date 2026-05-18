@@ -42,6 +42,9 @@ int T4CLoginSessionGetReconnectCooldownSeconds();
 /** A appeler depuis la boucle login (rejoint le thread logout termine). */
 void T4CLoginSessionPollBackgroundTasks();
 
+/** Ligne HUD monde (etat opcode 46, rappel deplacement local). */
+std::string T4CLoginSessionGetWorldHudLine();
+
 /** Annule retries « already logged » et ferme la session UDP (nouveau Connect). */
 void T4CLoginSessionAbortLogin();
 

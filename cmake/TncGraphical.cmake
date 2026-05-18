@@ -1,9 +1,21 @@
-# Sources TnC (Noth) + shim SDL3 pour la vue monde Linux.
-set(TNC_GRAPHICAL_ROOT
+# Sources TnC (mestoph) + shim SDL3 — code compile dans t4c_client (≠ T4C_DATA runtime).
+set(_TNC_ROOT_CANDIDATES
+    "${CMAKE_SOURCE_DIR}/../client_graphical_path_to_follow/decode/TnC_dev"
     "${CMAKE_SOURCE_DIR}/../client_graphical_sdl3_test/TnC_dev"
-    CACHE PATH "Racine TnC_dev (VSFInterface, MapInterface, …)")
+)
+if(NOT TNC_GRAPHICAL_ROOT OR NOT EXISTS "${TNC_GRAPHICAL_ROOT}/VSFInterface/vsfinterface.cpp")
+    set(TNC_GRAPHICAL_ROOT "")
+    foreach(_cand IN LISTS _TNC_ROOT_CANDIDATES)
+        if(EXISTS "${_cand}/VSFInterface/vsfinterface.cpp")
+            set(TNC_GRAPHICAL_ROOT "${_cand}")
+            break()
+        endif()
+    endforeach()
+endif()
+set(TNC_GRAPHICAL_ROOT "${TNC_GRAPHICAL_ROOT}" CACHE PATH
+    "Racine TnC_dev (sources MapInterface/VSFInterface — pas les assets .dec)")
 
-if(NOT EXISTS "${TNC_GRAPHICAL_ROOT}/VSFInterface/vsfinterface.cpp")
+if(NOT TNC_GRAPHICAL_ROOT OR NOT EXISTS "${TNC_GRAPHICAL_ROOT}/VSFInterface/vsfinterface.cpp")
     message(WARNING "TNC_GRAPHICAL_ROOT invalide: ${TNC_GRAPHICAL_ROOT} — vue monde desactivee")
     set(T4C_HAS_WORLD_VIEW FALSE)
     return()

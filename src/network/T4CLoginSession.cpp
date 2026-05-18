@@ -70,6 +70,10 @@ static std::atomic<bool> g_waitingPutPlayerInGame{false};
 static std::mutex g_putPlayerErrorMutex;
 static std::string g_putPlayerErrorMessage;
 static std::chrono::steady_clock::time_point g_putPlayerRequestAt{};
+/** Apres envoi opcode 46, en attente de la reponse serveur. */
+static std::atomic<bool> g_waitingFromPreInGame{false};
+/** -1 inconnu, 0 OK, 1 erreur (octet resultat paquet 46). */
+static std::atomic<int> g_fromPreInGameResult{-1};
 
 constexpr std::uint16_t kTfcStillConnected = 10; /* TFCSocket.h — serveur ; reponse = RQ_Ack (10) */
 
@@ -346,6 +350,8 @@ static void SendStillConnectedAck() {
 
 static void SendFromPreInGameToInGameLocked() {
     const auto pkt = BuildOpcodeOnlyPacket(static_cast<std::uint16_t>(RQ_FromPreInGameToInGame));
+    g_waitingFromPreInGame.store(true);
+    g_fromPreInGameResult.store(-1);
     SendToServerLocked(pkt);
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
                            "[PHASE] Envoi RQ_FromPreInGameToInGame (46) — etat serveur « en jeu » (packethandling.cpp).");
@@ -889,7 +895,15 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
             "pas confondre avec 19 (0x0013 = ViewEquiped).",
             static_cast<unsigned>(op), OpcodeLabel(op) ? OpcodeLabel(op) : "?");
     } else if (op == static_cast<std::uint16_t>(RQ_FromPreInGameToInGame)) {
-        T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Reponse RQ_FromPreInGameToInGame (46).");
+        g_waitingFromPreInGame.store(false);
+        int resultCode = -1;
+        if (nBufferSize >= 7) {
+            resultCode = static_cast<unsigned char>(bytes[6]);
+            g_fromPreInGameResult.store(resultCode);
+        }
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                               "[PHASE] Reponse RQ_FromPreInGameToInGame (46) code=%d.",
+                               resultCode);
     }
 }
 
@@ -1110,6 +1124,23 @@ int T4CLoginSessionGetReconnectCooldownSeconds() {
     return GetReconnectCooldownSecondsUnlocked();
 }
 
+std::string T4CLoginSessionGetWorldHudLine() {
+    if (g_waitingFromPreInGame.load()) {
+        return "Reseau: attente reponse 46 (async serveur)...";
+    }
+    const int r46 = g_fromPreInGameResult.load();
+    if (r46 == 0) {
+        return "Reseau: en jeu (46 OK) | fleches = carte locale";
+    }
+    if (r46 == 1) {
+        return "Reseau: erreur 46 (unit monde?) | fleches = carte locale";
+    }
+    if (g_pipelineStep.load() >= 6) {
+        return "Reseau: 46+60 envoyes | fleches = carte locale (pas move)";
+    }
+    return "Reseau: actif | fleches = carte locale (pas move)";
+}
+
 void T4CLoginSessionPollBackgroundTasks() {
     ReapFinishedLogoutThread();
     if (g_waitingPutPlayerInGame.load()) {
@@ -1247,6 +1278,8 @@ void T4CLoginSessionResetAfterReturnToLogin() {
     g_pendingCharacterList.store(false);
     g_pendingEnterWorld.store(false);
     g_waitingPutPlayerInGame.store(false);
+    g_waitingFromPreInGame.store(false);
+    g_fromPreInGameResult.store(-1);
     g_enterWorldSpawn = {};
     {
         std::lock_guard<std::mutex> lock(g_characterMutex);
@@ -1286,6 +1319,10 @@ int T4CLoginSessionGetReconnectCooldownSeconds() {
 }
 
 void T4CLoginSessionPollBackgroundTasks() {}
+
+std::string T4CLoginSessionGetWorldHudLine() {
+    return {};
+}
 
 void T4CLoginSessionAbortLogin() {}
 
