@@ -4,9 +4,15 @@
 
 Le but de départ était simple et con : **tester si le client T4C 1.68 se connecte à un serveur 1.68 qui tourne sous Linux**, sans avoir à revenir sous Windows, télécharger 7 Go de Visual Studio, et se battre avec un code source vieux de 20 ans.
 
-La destination finale est de porter le client sous Linux, voire en SDL3. Mais avant de se lancer dans ce chantier, autant vérifier que la base compile et que la connexion fonctionne. C'est exactement ce que ce repo documente.
+La destination finale est un client **jouable sous Linux (SDL3)**, avec le **même contrat réseau et les mêmes assets** que le client Windows (DirectX / CW32Sprite), tout en gardant le build **VS2022 + DirectX** intact derrière `#ifdef LINUX_PORT`.
+
+**Priorité d'exécution : Linux/SDL3 d'abord.** Windows reste la référence comportementale (opcodes, écrans, musique, rendu carte) — on ne le casse pas, on le recoupe derrière des `#ifdef` quand on porte une couche.
+
+Ce README est la **roadmap vivante** : il doit refléter où on en est (réseau, serveur, assets, rendu), pas seulement « ça compile sous VS2022 ».
 
 Le code source vient du repo de melodiass/elestranobaron (actuellement sans repo public). Le client installé dont sont tirés les assets de test est **The 4th Coming :: Rebirth** (installation locale, dossier `C:\Program Files (x86)\The4thComing`), qui contient apparemment des assets de plusieurs serveurs privés (Neerya, Realmud, Abomination, Saga...). On ne sait plus trop d'où ça sort — c'est le folklore T4C.
+
+> **Fil conducteur.** Pour ce projet et nos échanges (humains ou assistés), ce `README.md` est la **référence partagée** : on le fait évoluer au fil des découvertes plutôt que d'éparpiller la vérité dans des notes isolées. Quand une décision ou une précision technique est importante, elle doit soit y être écrite, soit y pointer depuis un chemin de fichier explicite.
 
 ---
 
@@ -212,14 +218,84 @@ Le launcher s'affiche, les champs IP/Login/Password/Connect sont fonctionnels. C
 
 ## État actuel du portage Linux/SDL3 (mai 2026)
 
-Le portage est déjà bien avancé, le repo n'est plus seulement un *fork-qui-compile-sous-VS2022* :
+Le repo n'est plus seulement un *fork-qui-compile-sous-VS2022*. On distingue **deux dimensions** :
 
-- **Build CMake Linux fonctionnel** (`CMakeLists.txt` à la racine, cible `t4c_client`, SDL3 + SDL3_image + SDL3_ttf via `find_package` ou `FetchContent`).
-- **LoginScreen SDL3** (`src/gui/LoginScreen.cpp`, `src/gui/LoginClientConfig.cpp`).
-- **Stack réseau portée** : `T4CLoginSession`, `CommCenter`, `IOCPCompat` (shim epoll/threads sous Linux), `T4CLinuxCommPort`, `T4CNetworkDebugLog`.
-- **Chiffrement TFC réutilisé tel quel** : on link directement `CLIENT168_RC14h_OK/.../CryptMestoph/crypt.cpp` (cf. `CMakeLists.txt` L75). Pas de réécriture, pas de divergence avec un serveur 1.68 standard.
-- **Handshake TFC validé bout-en-bout** : trace dans `debug/t4c_network_session.log`. Le canal chiffré aller/retour fonctionne, l'opcode 14 `RQ_RegisterAccount` est correctement décodé et le serveur répond — pour l'instant `REFUSE (1) — Your account is already logged on a server`, ce qui est un problème de session côté serveur, pas un bug client.
-- **Vue monde TnC intégrée** via `cmake/TncGraphical.cmake` (sources `VSFInterface`, `MapInterface`, `NPCManager`, `FontManager`, `TextManager` de `../client_graphical_path_to_follow/decode/TnC_dev/`) + un shim SDL2→SDL3 dans `third_party/tnc_sdl3/`.
+| Dimension | Question | Statut |
+|---|---|---|
+| **A — Réseau / protocole** | Le client parle-t-il comme un 1.68 RC14h au serveur Final Step ? | **Oui, flux principal validé** (voir ci-dessous) |
+| **B — Jeu visible** | Le client affiche-t-il le monde comme sous Windows (carte, sprites, audio) ? | **En cours** — c'est la priorité maintenant |
+
+### Dimension A — Réseau (socle posé)
+
+- **Build CMake Linux** : `t4c_client`, SDL3 + image + ttf (`CMakeLists.txt`).
+- **Écrans SDL3** : `LoginScreen`, `CharacterSelectScreen` (`src/gui/`).
+- **Stack réseau** : `T4CLoginSession`, `CommCenter`, shim Linux, log `debug/t4c_network_session.log`.
+- **Chiffrement TFC** : `crypt.cpp` mestoph linké tel quel (même binaire logique que Windows).
+- **Pipeline auth → sélection → entrée en jeu** (compte `test`, perso `TestPlayer`, serveur Linux Final Step) :
+
+  | Étape | Opcode | Critère observé (client) |
+  |---|---|---|
+  | Register + version | 14, 99 | `[AUTH] Verdict : ACCEPTE` |
+  | Liste persos | 103, 26 | `TestPlayer` affiché |
+  | Entrer en jeu | **13** | `RQ_PutPlayerInGame (13) OK — position x,y monde` |
+  | Passage in-game | **46**, **60** | envoyés après le 13 ; réponse **18** (ViewBackpack) reçue |
+
+  Le fil conducteur réseau documenté dans le log : **14 → 99 → 26 → 13 → 46 + 60**.
+
+- **Serveur** : le chargement perso (`PutPlayerInGame` async) a nécessité des correctifs dans `T4C_Server_Linux_Final_Step` (hors scope de ce repo client, mais indispensable pour tester). La connexion UDP peut encore expirer si le handler **46** bloque le thread d'analyse — à traiter côté serveur.
+
+### Dimension B — Rendu / assets (prochaine priorité)
+
+- **Code TnC** (mestoph) intégré via `cmake/TncGraphical.cmake` + shim SDL2→SDL3 (`third_party/tnc_sdl3/`).
+- **`client_graphical_path_to_follow/decode/`** : laboratoire historique (convert2, `TnC_dev`, GIFs de démo). **Ce n'est pas le chemin produit final** — voir [Contrat d'assets `T4C_DATA`](#contrat-dassets-t4c_data) plus bas.
+- **`GameWorldScreen`** : s'ouvre si `T4C_DATA` pointe vers des `sprites/` + `maps/` valides (même layout que la sortie de `convert2`). Sinon message d'erreur explicite (opcode 13 peut être OK quand même).
+
+### Ce qui n'est pas encore « jouer »
+
+- Tuiles / monstres / objets **synchronisés serveur** (opcodes mouvement, `UnitUpdate`, peripheric objects).
+- **Audio** Linux (équivalent `GameMusic.cpp` / VSB).
+- **Parité UI** complète (`NewInterface/` Windows) — hors scope immédiat.
+
+---
+
+## Contrat d'assets `T4C_DATA`
+
+Le client Windows lit les **Game Files** installés (`*.vsf`, `*.map`, VSB, etc.). Sous Linux on ne lit pas les VSF chiffrés au runtime : on consomme les **produits du pipeline offline**, comme le ferait une install convertie.
+
+### Layout canonique (runtime Linux **et** référence pour SDL3)
+
+```
+$T4C_DATA/
+  sprites/     ← *.dec (+ id_list.txt utilisé à la conversion)
+  maps/        ← *.rmap (ex. worldmap.rmap pour le monde 0)
+  sons/        ← *.wav (optionnel, issus du VSB décodé)
+  fonts/       ← polices attendues par FontManager (ex. font_trebuchet_12)
+  NPCList.txt  ← liste NPC pour NPCManager (démo / tests)
+```
+
+Résolution : variable d'environnement **`T4C_DATA`**, sinon chemins relatifs au binaire (`build/data`, etc.) — voir `src/game/TncDataPaths.cpp`.
+
+### Rôle de `client_graphical_path_to_follow/`
+
+| Élément | Rôle | Utilisation long terme |
+|---|---|---|
+| `decode/` (convert2, mestoph) | **Usine offline** : VSF/VSB/map → `.dec` / `.rmap` / WAV | On **génère** vers `$T4C_DATA`, on ne dépend pas du chemin du repo au runtime |
+| `decode/TnC_dev/` | **Prototype** MAPI / NPCManager sous SDL2 | Sources **réutilisées** dans le client via `TncGraphical.cmake` |
+| `decode/data/` | Jeu de test déjà converti | Symlink ou copie vers `$T4C_DATA` pour dev |
+
+**Principe :** le comportement SDL3 Linux doit être **le même que DirectX Windows** (mêmes noms de sprites via `id_list.txt`, même logique carte, même enchaînement opcode → écran), avec une couche de présentation SDL3 à la place de DirectDraw. « Mieux » = stabilité, logs, chemins clairs — pas un second pipeline d'assets parallèle.
+
+### Parité Windows ↔ Linux (cible)
+
+| Couche | Windows (référence) | Linux SDL3 (cible) | Statut |
+|---|---|---|---|
+| Auth / UI login | MFC + `TFCSocket` | `LoginScreen` + `T4CLoginSession` | OK |
+| Liste / sélection perso | UI native | `CharacterSelectScreen` | OK |
+| Wire TFC | `crypt.cpp` | même `crypt.cpp` | OK |
+| Entrée monde (13, 46, 60) | `packethandling.cpp` | `T4CLoginSession` | **13 OK** ; 46/60 envoyés |
+| Carte / sprites | CW32Sprite + VSF | TnC + `MAPInterface` + `VSFInterface` | **branché**, qualité dépend de `T4C_DATA` |
+| Musique / SFX | DirectSound + VSB | SDL_mixer ou audio SDL3 | à faire |
+| Monde réseau (PNJ, loot) | opcodes 69, 16, … | à faire | après rendu local OK |
 
 ---
 
@@ -261,7 +337,7 @@ Confusion classique : "le XOR est statique partagé". Vrai pour TFC (réseau), *
    rnd.SetSeed( 23422 );
    for( i = 0; i < 3418; i++ ) pbRandom[i] = rnd( 0, 255 );
    ```
-   Reproduit fidèlement par `T4C_Server_Linux_Final_Step/res/makewda.py` :
+   Reproduit fidèlement par `makewda.py` (dépôt serveur Final Step, même LCG que `key_168.py`) :
    ```python
    seed = 23422
    for _ in range(3418):
@@ -299,11 +375,13 @@ La **seule source de vérité** sur ce que le serveur 1.68 lit réellement est d
 
 | Objectif | WDA nécessaires | Niveau de peuplement |
 |---|---|---|
-| Faire booter le serveur | Oui | Minimal — `makewda.py` suffit (tous blocs à zéro) |
-| Jouer dans un monde vide (marcher, se déplacer) | Oui | Minimal — le client render local ne dépend pas des WDA |
-| Jouer dans un vrai monde (créatures, objets, téléporteurs) | Oui | **Peuplé — nécessite les WDA Havoc convertis** |
+| Faire booter le serveur Final Step 1.68 | Oui | **Prouvé** : `makewda.py` — deux fichiers minimalistes (~44 octets chacun), toutes sections à zéro, **clé XOR 1.68 correcte** |
+| Jouer dans un monde vide (marcher, se déplacer) | Oui | Même chose que ci-dessus (monde serveur vide ; le rendu carte côté client vient des VSF/rmap, pas des WDA) |
+| Jouer dans un vrai monde (créatures, objets, téléporteurs, cartes serveur) | Oui | **Non résolu** : les WDA Havoc compilés (rar 1.61, ~24 Mo) **ne font pas démarrer / ne fonctionnent pas** tels quels sur le serveur 1.68 — même après simple copie ou key-swap (hypothèse non validée) |
 
-Pour l'**Étape Finale** (jouer réellement), les WDA doivent être peuplés avec le contenu Havoc. L'objectif minimal acceptable est : carte de navigation serveur correcte + au moins une zone de spawn joueur.
+**Fait d'expérience (à ne pas inverser avec la théorie)** : ce qui fait **démarrer** le serveur aujourd'hui, ce n'est pas le WDA Havoc du rar, c'est **`makewda.py`**. Ce script génère `WDA/T4C Worlds.WDA` et `WDA/T4C Edit.WDA` avec le même squelette binaire vide et le chiffrement 1.68 attendu par `WDAFile.cpp`. Le monde est vide, mais le parseur 1.68 accepte le fichier.
+
+Pour l'**étape « jouer dans un vrai monde »**, il reste à **réinjecter** le contenu Havoc dans un format que le parseur 1.68 accepte — ce n'est pas acquis avec « copier le binaire + changer la clé » seul.
 
 ### Comment les WDA Havoc sont-ils stockés — la découverte clé
 
@@ -317,6 +395,22 @@ Le `.txt` décompilé (125 835 lignes pour `T4C Worlds.txt`, 4.3 Mo) **ne contie
 
 Ces BMP (un par carte, ~4.7 Mo chacun à 3072×3072 × 4 bits) contiennent les codes de couleur terrain. C'est `wc.c` qui les lit au moment de la compilation pour produire le WDA binaire. Les BMP ne sont pas archivés dans le rar Havoc.
 
+### Les BMP WDA ne sont ni les cartes client, ni des VSF
+
+Trois représentations du « terrain », trois usages — **pas les mêmes fichiers** :
+
+| Représentation | Format | Où | Rôle |
+|---|---|---|---|
+| **Serveur / WDA** | BMP 16 couleurs 4 bpp non compressé (`WriteMap` dans `havoc2/common.h`) | Chaîne Storm → `wc` → `T4C Worlds.WDA` | **Logique serveur** : code couleur par case (même palette que l’éditeur Storm / ChaotikMind), collision, zones, téléporteurs côté monde |
+| **Client affichage** | `*.map` chiffrés dans `Game Files/` → pipeline mestoph → `*.rmap` | `client_graphical_path_to_follow/decode/` (`extraction_maps.cpp`, `extraction_maps_conv.cpp`) | **Rendu** : chaque case pointe vers un **sprite** (nom via `id_list.txt`), pas vers un BMP terrain |
+| **Sprites** | `*.vsf` → `*.dec` | VSF / TnC | **Graphismes** des tuiles, persos, objets — ce que `MAPInterface` dessine ; ce n’est **pas** la source des BMP Storm |
+
+- Les BMP Havoc **ne sont pas** extraits des `.map` client ni des VSF.
+- Les `.map` client **ne sont pas** lus par `wc` ni par le serveur WDA.
+- Les VSF contiennent les **images** ; les `.rmap` disent **quel sprite** afficher ; les BMP/WDA disent **quel code terrain** le serveur utilise (souvent la même grille 3072×3072, sémantique différente).
+
+Le client 1.68 charge aussi des fichiers monde binaires propriétaires (`Tileset::LoadVirtualMap` → `WorldFileName[]`, chunks indexés) — encore un format filaire client, distinct du BMP Storm et du `.rmap` mestoph.
+
 En revanche, le **WDA binaire compilé est directement présent** dans le rar :
 
 ```
@@ -327,9 +421,27 @@ Wda Serveur 1.61 Havoc/NPCs.WDA               54 034 bytes  (clé 1.61)
 
 Ces binaires contiennent toutes les données (y compris les tuiles de carte compilées). Il n'y a pas besoin de les recompiler depuis le `.txt` — ils existent déjà.
 
-### Plan WDA — key-swap 1.61 → 1.68 (3 étapes)
+### `makewda.py` — ce qui marche aujourd'hui (boot serveur)
 
-Le seul obstacle est la clé XOR. La structure binaire interne est la même, seule la clé diffère. Le plan est donc :
+Script `makewda.py` dans le dépôt serveur Final Step — écrit `WDA/T4C Worlds.WDA` et `WDA/T4C Edit.WDA` dans le répertoire courant.
+
+Contenu attendu au boot :
+
+- header `0x0CA7`, version 1 ;
+- compteurs de sections à **0** (sorts, cartes, objets, créatures, téléporteurs, clans, etc.) ;
+- chiffrement XOR **1.68** (LCG seed 23422, 3418 octets) — identique à `WDAFile.cpp`.
+
+Ce n'est **pas** une conversion du Havoc : c'est un **stub vide** qui satisfait le parseur pour **démarrer**. Tous les scripts ratés dans `tools/` du repo serveur étaient des tentatives avant cette solution.
+
+### Plan WDA Havoc — key-swap 1.61 → 1.68
+
+**Outil implémenté** : dossier [`key_swaps/`](key_swaps/) (`keyswap_wda.py`, `python3 test_keyswap.py`, `./install_to_build.sh`). Les tests automatisés confirment : round-trip OK, header `0x0CA7`, **761 + 17 sorts** parsables après swap. Déployer les WDA swappés dans `T4C_Server_Linux_Final_Step/build/WDA/`.
+
+**Crash `WDAFile::Read` / `dwSize=2782684579` sur « Loading spells »** : le serveur lit des WDA **Havoc 1.61 non swappés** (md5 `c2d598…` comme `tiforci/havoc2/`). `./build.sh` peut écraser `build/WDA/` : après chaque build, `key_swaps/install_to_build.sh`, puis `./T4CServer` depuis `build/`.
+
+**Attention** : un header XOR correct **ne garantit pas** que le serveur 1.68 parse toutes les sections Havoc (objets, cartes…). Si le boot échoue après les sorts, tester `makewda.py` ou étendre `probe_wda_parse.py`.
+
+Si le blocage n'était **que** la clé XOR, le plan serait :
 
 **Étape W1 — Extraire les binaires du rar** (une seule fois, dans un dossier dédié hors du repo client, par exemple `../../tiforci/havoc2_extracted/`) :
 
@@ -370,7 +482,17 @@ L'astuce : `b ^ k61 ^ k68` = déchiffre 1.61 + rechiffre 1.68 en un seul pass.
 
 **Étape W3 — Test sur le serveur Final Step.** Si la structure binaire 1.61 est directement lisible par le serveur 1.68, le monde est opérationnel. Si le serveur lève une exception `WDAFileException(EndOfFile)` sur un champ manquant, on identifie lequel (depuis `WDAObjects.cpp` etc.) et on corrige. C'est empirique et localisé — pas une réécriture aveugle.
 
-**Note** : `wc.c` et `wd.c` de Sorkvild restent utiles pour **inspecter** (`wd`) ou **modifier** (`wc`) le contenu world sans toucher au binaire directement. Pour réutiliser `wc` sur Linux : `gcc wc.c inifile.c -o wc` — mais il faudra retrouver (ou régénérer) les BMP de tuiles si on veut recompiler from scratch. Ce n'est pas prioritaire tant que le key-swap fonctionne.
+**Note** : `wc.c` et `wd.c` de Sorkvild restent utiles pour **inspecter** (`wd`) le Havoc ou **recompiler** (`wc`) — mais `wc` exige les BMP ; et produire un WDA 1.61 avec `wc` ne garantit pas qu'il sera lisible par le parseur **1.68** sans travail de structure supplémentaire.
+
+### WDA : que faire selon l'objectif ?
+
+| Objectif | Quoi utiliser | Statut |
+|---|---|---|
+| Serveur qui **boot** | `makewda.py` | **OK** (expérience projet) |
+| Monde **peuplé** (Havoc) | WDA du rar 1.61 (+ éventuellement key-swap, ou conversion champ par champ via `WDA*.cpp`) | **Pas OK** aujourd'hui |
+| Recompiler depuis `.txt` | `wc` + BMP manquants dans le rar | Piste lourde, format 1.61 |
+
+**En résumé** : ne pas confondre « faire démarrer le serveur » (`makewda.py`, vide) et « avoir le monde Havoc » (WDA compilé du rar — **pas** validé sur 1.68). Les BMP ne sont **pas** une dépendance runtime du serveur ; ils n'entrent en jeu que si tu repasses par `wc` pour **fabriquer** un nouveau binaire depuis le `.txt`.
 
 ## Système audio — VSB, pas WDA
 
@@ -432,7 +554,7 @@ Le runtime Windows utilise DirectSound (`T3VSBSound` + `sbBuffer`). Pour Linux/S
 
 ### Ce que ça implique pour la roadmap
 
-La musique n'est **pas bloquante** pour les étapes 0–4 (auth → monde affiché). Elle devient pertinente à l'étape 5 (bascule GameWorldScreen complète). On peut l'ajouter en parallèle ou en étape 4.5 : remplacer les appels DirectSound par `SDL_mixer`, brancher les mêmes noms de pistes depuis les fichiers `.wav` déjà décodés.
+Voir **« Roadmap finale »** ci-dessous : l’audio est explicitement raccroché aux étapes TFC (liste persos → entrée in-game) et aux travaux transverses. En une phrase : musique **non bloquante** pour auth/MOTD ; souhaitable dès l’écran liste persos (`Sadness Music`) puis obligatoire pour une expérience proche du client Windows après opcode **13** (`LoadNewSound`).
 
 ## Alignement de versions vérifié
 
@@ -446,20 +568,25 @@ La musique n'est **pas bloquante** pour les étapes 0–4 (auth → monde affich
 
 Avoir un client Linux/SDL3 capable de se connecter à un serveur 1.68 **inchangé**, traverser tout le pipeline (auth → liste persos → entrée in-game → rendu monde temps réel), tout en gardant le build Windows/DirectX intact derrière `#ifdef LINUX_PORT`.
 
-### Quatre briques, quatre origines
+### Cinq briques, cinq origines
 
 | Brique | Origine | Statut | Choix |
 |---|---|---|---|
 | Protocole filaire + chiffrement TFC | code Vircom + `CryptMestoph` (mestoph) | branché, handshake OK | **réutilisé tel quel** |
 | Pipeline graphique offline (sprites / maps) | `client_graphical_path_to_follow/decode/` (mestoph) | utilisable, sorties `*.dec` + `*.rmap` déjà produites | **réutilisé** |
 | Pipeline graphique runtime (TnC) | `client_graphical_path_to_follow/decode/TnC_dev/` (mestoph) | intégré via `TncGraphical.cmake` + shim | **réutilisé sous SDL3** |
-| Données serveur compilées (WDA) | `../../tiforci/havoc2/` (Sorkvild) | outils dispos, à recompiler sous Linux | **réutilisé** |
+| Audio (musiques / SFX) | `T4CGameFile.VSB` + WAV décodés (`decode/data/sons/`) | Windows : DirectSound (`NewSound.cpp`, `GameMusic.cpp`) ; Linux : **à brancher** | **même contenu**, couche lecture réécrite (SDL_mixer ou audio SDL3) |
+| Données serveur (WDA) | `makewda.py` (boot) ; Havoc + Sorkvild `wc`/`wd` (monde plein, **à conquérir**) | boot : **OK** via `makewda.py` ; Havoc : **non validé** sur 1.68 | stub vide **réutilisé** ; contenu Havoc **en recherche** |
 
 ### Détail des briques
 
 **1. Réseau et chiffrement (réutilisés)**
 
-On garde le protocole 1.68 et `TFCCrypt::EncryptS/DecryptS` (`crypt.cpp` + `xorkey.h` de mestoph). Réécrire le wire format casserait la compatibilité avec tout serveur 1.68 — ce qui irait directement à l'encontre du but ("jouer"). Le log `debug/t4c_network_session.log` documente le pipeline en 5 phases (RQ_RegisterAccount 14 → RQ_AuthenticateServerVersion 99 → FINAL STEP). Reste à implémenter proprement les opcodes post-auth : **26** (liste persos), **65** (query version serveur), MOTD, sélection perso, paquets mouvement/monde.
+On garde le protocole 1.68 et `TFCCrypt::EncryptS/DecryptS` (`crypt.cpp` + `xorkey.h` de mestoph). Réécrire le wire format casserait la compatibilité avec tout serveur 1.68.
+
+**Fait (mai 2026)** : auth **14/99**, liste **26/103**, entrée **13**, envoi **46+60** après OK sur le 13. Prochain travail réseau **côté client** : handlers opcodes monde (mouvement, unités, objets proches) — pas re-refaire le handshake.
+
+**Hors repo client** : stabilité serveur sur `PutPlayerInGame` / **46** (pas de blocage thread UDP, pas de timeout 15 s pendant le chargement).
 
 **2. Décodage offline des assets (mestoph)**
 
@@ -471,13 +598,17 @@ Source : `client_graphical_path_to_follow/decode/`. Le flux :
 id_list.txt    ─┘                                              *.rmap (cartes décodées)
 ```
 
-Les `*.dec` et `*.rmap` sont déjà générés dans `decode/data/sprites/` et `decode/data/maps/`. On les pointe au runtime via le symlink `data/` créé en `POST_BUILD` par `CMakeLists.txt` (L135-143).
+Les `*.dec` et `*.rmap` sont produits par `convert2` (souvent sous `client_graphical_path_to_follow/decode/data/` en dev). **Au runtime on pointe `$T4C_DATA`**, pas le repo graphique : copie, symlink, ou `export T4C_DATA=.../decode/data` le temps du dev. Le symlink `build/data` (CMake `POST_BUILD`) n'est qu'un raccourci de confort.
 
 **3. Runtime graphique TnC (mestoph, porté SDL3)**
 
 `VSFInterface` charge les `*.dec` en cache `SDL_Texture`, `MAPInterface` rend les tuiles, `NPCManager` gère les sprites animés, `FontManager` / `TextManager` font le texte. Tout est intégré tel quel via `cmake/TncGraphical.cmake`, le shim `third_party/tnc_sdl3/include/SDL/SDL.h` et `tnc_sdl2_compat.h` mappent l'API SDL2 attendue par le code de mestoph vers SDL3.
 
-**4. WDA serveur (Sorkvild)**
+**4. Audio client (VSB — hors WDA, hors TFC)**
+
+La musique ne transite pas par le réseau ni par les WDA : le client choisit les pistes dans `GameMusic.cpp` selon l’écran (ex. `"Sadness Music"` sur la liste des persos) puis monde + coordonnées après opcode **13** (cf. section **« Système audio — VSB, pas WDA »**). Le port Linux remplace DirectSound par SDL ; les fichiers peuvent partir des `.wav` déjà extraits du pipeline mestoph.
+
+**5. WDA serveur (Sorkvild)**
 
 Le format WDA était propriétaire Vircom, mais le dump `../../tiforci/havoc2/` contient les sources C de **Sorkvild** :
 
@@ -493,7 +624,7 @@ WDA pertinents pour nous :
 - `T4C Edit.WDA` — données d'édition (objets, sorts, créatures, dialogues)
 - `NPCs.WDA` + `Format du fichier NPCs.wda.txt` — scripts d'instructions PNJ
 
-À quoi ça sert dans la roadmap : (a) comprendre la sémantique des paquets serveur dérivés des WDA ; (b) pouvoir générer un monde de test reproductible ; (c) à terme, mocker un mini-serveur local pour développer offline sans dépendre d'un serveur tiers.
+À quoi ça sert dans la roadmap : (a) **`makewda.py`** pour toute session serveur qui doit démarrer ; (b) **`wd`** pour lire le Havoc et comprendre la sémantique ; (c) **prochaine brique ouverte** : faire accepter le contenu Havoc (ou une partie) au parseur 1.68 — key-swap, migration champ par champ depuis `WDA*.cpp`, ou autre — ce n'est pas encore fait.
 
 ### Architecture cible
 
@@ -516,62 +647,67 @@ WDA pertinents pour nous :
   │      │                                     │
   │ MAPInterface ──► WorldRenderer             │
   │      │                                     │
+  │ SDL_mixer / audio SDL3 ◄── WAV (sons/)     │
+  │      │      (équivalent GameMusic.cpp)     │
   │ SDL_RenderTexture / SDL_RenderPresent      │
   └────────────────────────────────────────────┘
 ```
 
-### Étapes ordonnées par opcode TFC
+### Étapes ordonnées — deux phases
 
-Chaque étape a un critère d'acceptation factuel et observable dans le log.
+Chaque étape a un critère d'acceptation **observable** (log client `debug/t4c_network_session.log` et/ou écran).
+
+#### Phase 1 — Connexion et entrée en jeu (réseau + écrans SDL3)
 
 ```
-[ÉTAT ACTUEL] build OK, handshake TFC OK jusqu'à la phase 2/5
-              (debug/t4c_network_session.log : opcode 14 envoyé,
-               réponse 52 octets décodée, REFUS 1 = compte déjà loggé)
-                              │
-                              ▼
-[Étape 0]  Compte test propre côté serveur
-           → critère : phase 5/5 atteinte, [AUTH] Verdict : ACCEPTE.
-           Pas un travail client, c'est de la conf serveur.
-                              │
-                              ▼
-[Étape 1]  Opcodes 65 (RQ_QueryServerVersion) + 66 (RQ_MessageOfDay)
-           → critère : MOTD affiché dans la console client SDL3.
-                              │
-                              ▼
-[Étape 2]  Opcode 26 (RQ_GetPersonnalPClist)
-           → critère : ≥1 perso reçu, liste rendue à l'écran.
-                              │
-                              ▼
-[Étape 3]  Opcodes 13 (RQ_PutPlayerInGame) + 46 (RQ_FromPreInGameToInGame)
-           → critère : bascule LoginScreen → GameWorldScreen.
-                              │
-                              ▼
-[Étape 4]  Opcode 9 (RQ_GetPlayerPos) + MAPInterface
-           → critère : première tuile de worldmap.rmap rendue à l'écran
-           à la bonne position serveur.
-                              │
-                              ▼
-[Étape 5]  Opcodes 1-8 (Move N/NE/E/...) + 69 (RQ_UnitUpdate)
-           → critère : le perso bouge, le serveur reçoit les déplacements
-           et renvoie les UnitUpdate des unités proches.
-                              │
-                              ▼
-[Étape 6]  Opcodes 16 (RQ_SendPeriphericObjects) + 60 (RQ_GetNearItems)
-           → critère : NPCs et items visibles autour du perso.
-
-           ─────► À ce stade : ON JOUE.
-
-[Étapes suivantes] combat, chat, magie, guildes — extensions
-incrémentales sur le même socle réseau + rendu.
+[✓] Build Linux + Windows (VS2022) inchangé côté #ifdef
+[✓] Étape 0 — Compte test + serveur qui répond (conf ops / SQL / patches serveur)
+[✓] Étape 1 — 14 + 99  → [AUTH] Verdict : ACCEPTE
+[✓] Étape 2 — 26 + 103 → liste persos à l'écran (CharacterSelect)
+[✓] Étape 3a — opcode 13 → position monde reçue (0x000D, pas confondre avec 0x0013 = ViewEquiped)
+[~] Étape 3b — 46 + 60 envoyés ; GameWorldScreen si T4C_DATA OK ; serveur : handler 46 sans blocage
+[ ] Étape 1 bis (optionnel) — 65/66 MOTD affiché (cosmétique)
+[ ] Audio liste persos — "Sadness Music" (VSB → SDL), non bloquant
 ```
+
+#### Phase 2 — Parité rendu et monde réseau (priorité Linux, référence DirectX)
+
+C'est la **nouvelle dimension** : même ressenti visuel/sonore que Windows, puis mêmes opcodes « monde ».
+
+```
+[ ] B0 — Documenter / figer $T4C_DATA (copie depuis convert2 ou install Rebirth convertie)
+[ ] B1 — GameWorldScreen : carte visible à la position du 13 (MAPInterface + bons .rmap)
+[ ] B2 — Sprites / calques (VSFInterface) alignés id_list — pas seulement la démo TnC
+[ ] B3 — Audio : GameMusic / zone (VSB ou WAV sous $T4C_DATA/sons/)
+[ ] B4 — Opcode 9 (GetPlayerPos) + synchro caméra
+[ ] B5 — Mouvements 1–8 + UnitUpdate (69)
+[ ] B6 — Peripheric objects (16) + near items (60) — entités autour du perso
+
+           ─────► Critère « ON JOUE » : carte + perso qui bouge + entités visibles + son de zone
+
+[Phase 3] combat, chat, sorts, UI NewInterface — incrémental, opcode par opcode
+```
+
+**Règle de travail :** toute nouvelle feature **client Linux** vit dans `src/` + `#ifdef LINUX_PORT` ; le chemin Windows (`CLIENT168_RC14h_OK/`, DirectX) reste compilable. Quand on porte une brique (ex. musique), on lit d'abord le comportement Windows (`GameMusic.cpp`, `packethandling.cpp`) puis on reproduit sous SDL3.
 
 ### Travaux transverses (en parallèle des étapes ci-dessus)
 
 - **Non-régression Windows** : tout le code Linux est isolé par `#ifdef LINUX_PORT` (`add_compile_definitions(LINUX_PORT)` dans `CMakeLists.txt` L60). Le build VS2022 doit continuer à passer à chaque PR.
 - **CI Linux** : ajouter un job qui build `t4c_client` + lance un smoke test sur le handshake (mock UDP rejouant la trace de `debug/t4c_network_session.log`).
+- **Audio Linux** : porter `NewSound.cpp` / `GameMusic.cpp` (DirectSound → SDL_mixer ou équivalent SDL3) ; fichiers sources les `.wav` de `client_graphical_path_to_follow/decode/data/sons/` avec les **mêmes noms de pistes** que dans le VSB (`"Sadness Music"`, `"Forest Music"`, …). Peut démarrer dès l’étape 2, doit être satisfaisant avant une démo « jeu complet ».
 - **Outils Sorkvild Linux** (optionnel, utile pour la rétro-ing) : recompiler `wc` / `wd` sous Linux (`gcc wc.c inifile.c -o wc`).
 - **Aucun travail WDA côté client** : c'est explicitement hors scope client. Si le serveur a un problème de WDA, ça se règle dans `T4C_Server_Linux_Final_Step`, pas ici.
+
+### Ce que ce README ne détaille pas encore (suite probable)
+
+- **Patches serveur** : chargement perso async, timeout UDP, handler opcode **46** — dépôt `T4C_Server_Linux_Final_Step`, pas ce client.
+- **Persistance et ops** : SQL / comptes, sessions « already logged », administration serveur.
+- **Launcher** : `T4CLauncher` (MFC) vs lancement direct de `t4c_client` sous Linux.
+- **Option CD audio** : le client original peut préférer le CD (`bUseCD` dans les options) — chemin à trancher ou ignorer sur Linux.
+- **Surface opcode complète** après « on joue » : chat, combat détaillé, sorts, guildes, banque, commerce, etc. (la liste est dans `PacketTypes.h`).
+- **Parité UI** : tout l’arbre `NewInterface/` (centaines de `.cpp`) — priorisation au cas par cas.
+- **Packaging Linux** : dépendances SDL, chemins `data/`, distribution binaire.
+- **WDA monde plein** : le Havoc 1.61 **ne remplace pas** `makewda.py` pour le boot — c’est un chantier à part (key-swap et/ou différences de structure 1.61 vs 1.68, à diagnostiquer sur le serveur quand on retente le rar).
 
 ### Principe de non-réécriture
 
@@ -580,7 +716,7 @@ On a fait le choix explicite de **ne rien réécrire de ce qui marche déjà** :
 - Pas de nouveau protocole : le serveur 1.68 est la vérité, on parle son langage.
 - Pas de nouveau chiffrement : `crypt.cpp` de mestoph est partagé entre Windows et Linux, un seul code source.
 - Pas de nouveau format d'assets : on consomme les `.dec` / `.rmap` produits par le pipeline mestoph, et on garde les `.WDA` lisibles via `wd` Sorkvild.
-- Seule la couche présentation est réécrite en SDL3 — parce que DirectDraw / CW32Sprite ne sont par définition pas portables.
+- Seules les couches **présentation** sont réécrites — graphiques en SDL3 (DirectDraw / CW32Sprite non portables) et **audio** (DirectSound → SDL), sans changer les noms logiques des pistes ni le protocole.
 
 ### Crédits
 

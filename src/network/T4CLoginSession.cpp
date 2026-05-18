@@ -37,8 +37,13 @@ static std::mutex g_sessionMutex;
 static std::unique_ptr<CCommCenter> g_comm;
 static CCommMonitorEmpty g_monitorEmpty;
 
-static std::atomic<bool> g_pendingSuccessDialog{false};
+static std::atomic<bool> g_pendingCharacterList{false};
+static std::atomic<bool> g_pendingEnterWorld{false};
 static std::atomic<bool> g_successAlreadyShown{false};
+static std::mutex g_characterMutex;
+static std::vector<T4CCharacterSlot> g_characterList;
+static int g_maxCharactersPerAccount{3};
+static T4CEnterWorldSpawn g_enterWorldSpawn{};
 
 /** Cible UDP du login (copiee au Start pour reponses depuis le thread d’analyse). */
 static sockaddr_in g_serverAddr{};
@@ -59,9 +64,12 @@ constexpr int kPostAlreadyLoggedCooldownSec = 30;
 /** Apres Esc monde : le serveur garde souvent l'ancien port UDP > 20 s. */
 static std::chrono::steady_clock::time_point g_worldLogoutFinishedAt{};
 /** 0 inactif, 1 attente RQ_RegisterAccount (14), 2 attente RQ_AuthenticateServerVersion (99),
- *  3 auth OK — envoi post-auth, 4 attente RQ_GetPersonnalPClist (26),
- *  5 monde (46 FromPreInGameToInGame envoye). */
+ *  3 auth OK, 4 liste persos (26), 5 attente reponse 13, 6 en jeu (46+60 envoyes). */
 static std::atomic<int> g_pipelineStep{0};
+static std::atomic<bool> g_waitingPutPlayerInGame{false};
+static std::mutex g_putPlayerErrorMutex;
+static std::string g_putPlayerErrorMessage;
+static std::chrono::steady_clock::time_point g_putPlayerRequestAt{};
 
 constexpr std::uint16_t kTfcStillConnected = 10; /* TFCSocket.h — serveur ; reponse = RQ_Ack (10) */
 
@@ -347,10 +355,159 @@ static void SendFromPreInGameToInGameLocked() {
 static void SendPostAuthRequests() {
     const auto pcList = BuildOpcodeOnlyPacket(static_cast<std::uint16_t>(RQ_GetPersonnalPClist));
     SendToServerLocked(pcList);
-    g_pipelineStep.store(4);
+    g_pipelineStep.store(3);
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
-                           "[PHASE] 6/7 — Envoi RQ_GetPersonnalPClist (26), attente liste persos.");
+                           "[PHASE] Envoi RQ_GetPersonnalPClist (26), attente liste persos.");
     T4CNetworkDebugLog("[UDP] -> file d'envoi : RQ_GetPersonnalPClist (%zu octets TFC).", pcList.size());
+}
+
+static std::vector<unsigned char> BuildPutPlayerInGamePacket(const std::string &playerName) {
+    std::vector<unsigned char> v;
+    v.assign(4, 0);
+    PushBeShort(v, static_cast<std::uint16_t>(RQ_PutPlayerInGame));
+    const std::size_t n = std::min(playerName.size(), static_cast<std::size_t>(255));
+    v.push_back(static_cast<unsigned char>(n));
+    AppendTfcpayload(v, playerName.substr(0, n));
+    return v;
+}
+
+static void SendGetNearItemsLocked() {
+    const auto pkt = BuildOpcodeOnlyPacket(static_cast<std::uint16_t>(RQ_GetNearItems));
+    SendToServerLocked(pkt);
+    T4CNetworkDebugLog("[UDP] -> RQ_GetNearItems (60).");
+}
+
+static void ParseMaxCharactersPerAccountInfo(const unsigned char *data, int len) {
+    if (!data || len < 7 || !TfcHeaderLooksSane(data, len)) {
+        return;
+    }
+    const int maxChars = static_cast<int>(data[6]);
+    {
+        std::lock_guard<std::mutex> lock(g_characterMutex);
+        g_maxCharactersPerAccount = maxChars;
+    }
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_MaxCharactersPerAccountInfo (103) : max %d persos/compte.", maxChars);
+}
+
+static void ParsePersonnalPClist(const unsigned char *data, int len) {
+    if (!data || len < 7 || !TfcHeaderLooksSane(data, len)) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn, "[PHASE] RQ_GetPersonnalPClist (26) : paquet trop court.");
+        return;
+    }
+    const unsigned char count = data[6];
+    std::vector<T4CCharacterSlot> slots;
+    int pos = 7;
+    for (unsigned ci = 0; ci < count; ++ci) {
+        if (pos >= len) {
+            break;
+        }
+        const unsigned char nameLen = data[pos++];
+        if (pos + nameLen + 4 > len) {
+            T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
+                                   "[PHASE] Liste persos tronquee a l'entree %u.", ci);
+            break;
+        }
+        T4CCharacterSlot slot;
+        slot.name.assign(reinterpret_cast<const char *>(data + pos), nameLen);
+        pos += nameLen;
+        slot.race = ReadBeUint16(data, pos, len);
+        pos += 2;
+        slot.level = ReadBeUint16(data, pos, len);
+        pos += 2;
+        slots.push_back(std::move(slot));
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_characterMutex);
+        g_characterList = std::move(slots);
+    }
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_GetPersonnalPClist (26) : %u perso(s) parse(s).", count);
+    {
+        std::lock_guard<std::mutex> lock(g_characterMutex);
+        for (const auto &s : g_characterList) {
+            T4CNetworkDebugLog("[PHASE]   - %s (race %u, niv %u)", s.name.c_str(),
+                               static_cast<unsigned>(s.race), static_cast<unsigned>(s.level));
+        }
+    }
+}
+
+static const char *PutPlayerInGameErrorText(unsigned char code) {
+    switch (code) {
+        case 1:
+            return "Position monde invalide.";
+        case 2:
+            return "Ce personnage n'appartient pas au compte.";
+        case 3:
+            return "Personnage deja connecte ailleurs.";
+        case 4:
+            return "Trop de personnages sur le compte.";
+        case 5:
+            return "Creation du personnage echouee.";
+        case 6:
+            return "Chargement BDD echoue — executer tools/sql/seed_test_player_mariadb.sql sur t4c_server.";
+        case 7:
+            return "Serveur occupe (chargement deja en cours) — attendez ou reconnectez.";
+        case 8:
+            return "Nom de personnage invalide.";
+        case 9:
+            return "Donnees personnage corrompues (wlX/wlY/wlWorld ?).";
+        case 10:
+            return "Acces au personnage refuse.";
+        default:
+            return "Entree en jeu refusee par le serveur.";
+    }
+}
+
+static void SetPutPlayerInGameError(unsigned char code) {
+    g_waitingPutPlayerInGame.store(false);
+    g_pipelineStep.store(4);
+    std::lock_guard<std::mutex> lock(g_putPlayerErrorMutex);
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "Erreur %u : %s", static_cast<unsigned>(code), PutPlayerInGameErrorText(code));
+    g_putPlayerErrorMessage = buf;
+}
+
+static void HandlePutPlayerInGameReply(const unsigned char *data, int len) {
+    g_waitingPutPlayerInGame.store(false);
+    if (!data || len < 7 || !TfcHeaderLooksSane(data, len)) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
+                               "[PHASE] RQ_PutPlayerInGame (13) : reponse trop courte (%d).", len);
+        return;
+    }
+    const unsigned char err = data[6];
+    if (err != 0) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
+                               "[PHASE] RQ_PutPlayerInGame (13) refuse : code erreur %u.", static_cast<unsigned>(err));
+        SetPutPlayerInGameError(err);
+        return;
+    }
+    if (len < 17) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
+                               "[PHASE] RQ_PutPlayerInGame (13) OK partiel mais corps trop court (%d).", len);
+        return;
+    }
+    const std::int16_t x = static_cast<std::int16_t>(ReadBeUint16(data, 11, len));
+    const std::int16_t y = static_cast<std::int16_t>(ReadBeUint16(data, 13, len));
+    const std::int16_t world = static_cast<std::int16_t>(ReadBeUint16(data, 15, len));
+
+    T4CEnterWorldSpawn spawn;
+    spawn.x = static_cast<unsigned int>(x < 0 ? 0 : x);
+    spawn.y = static_cast<unsigned int>(y < 0 ? 0 : y);
+    spawn.world = static_cast<unsigned short>(world < 0 ? 0 : world);
+    spawn.valid = true;
+    g_enterWorldSpawn = spawn;
+
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_PutPlayerInGame (13) OK — position %u,%u monde %u.",
+                           spawn.x, spawn.y, static_cast<unsigned>(spawn.world));
+
+    if (g_pipelineStep.load() >= 3) {
+        SendFromPreInGameToInGameLocked();
+        SendGetNearItemsLocked();
+        g_pipelineStep.store(6);
+        g_pendingEnterWorld.store(true);
+    }
 }
 
 static std::vector<unsigned char> BuildRegisterAccountPacket(const std::string &login, const std::string &password) {
@@ -631,6 +788,16 @@ static const char *OpcodeLabel(std::uint16_t op) {
             return "RQ_FromPreInGameToInGame";
         case RQ_PutPlayerInGame:
             return "RQ_PutPlayerInGame";
+        case RQ_ViewEquiped:
+            return "RQ_ViewEquiped";
+        case RQ_ViewBackpack:
+            return "RQ_ViewBackpack";
+        case RQ_HPchanged:
+            return "RQ_HPchanged";
+        case RQ_ManaChanged:
+            return "RQ_ManaChanged";
+        case RQ_LevelUp:
+            return "RQ_LevelUp";
         default:
             return nullptr;
     }
@@ -698,19 +865,31 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
         T4CNetworkDebugLogKind(T4CMatrixLogKind::Auth, "[AUTH] Message serveur (info/texte).");
     } else if (op == static_cast<std::uint16_t>(RQ_RegisterAccount)) {
         LogRegisterAccountReply(bytes, nBufferSize);
-    }
-
-    if (op == static_cast<std::uint16_t>(RQ_GetPersonnalPClist)) {
-        T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
-                               "[PHASE] 7/7 — RQ_GetPersonnalPClist (26) recu : declenchement vue monde SDL3.");
-        if (g_pipelineStep.load() >= 2) {
-            SendFromPreInGameToInGameLocked();
-            g_pipelineStep.store(5);
+    } else if (op == static_cast<std::uint16_t>(RQ_MaxCharactersPerAccountInfo)) {
+        ParseMaxCharactersPerAccountInfo(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_GetPersonnalPClist)) {
+        ParsePersonnalPClist(bytes, nBufferSize);
+        if (g_pipelineStep.load() >= 3) {
+            g_pipelineStep.store(4);
         }
-        SDL_Log("[NETWORK] Liste persos recue — passage vue monde.");
+        SDL_Log("[NETWORK] Liste persos recue — ecran selection.");
         if (!g_successAlreadyShown.exchange(true)) {
-            g_pendingSuccessDialog.store(true);
+            g_pendingCharacterList.store(true);
         }
+    } else if (op == static_cast<std::uint16_t>(RQ_PutPlayerInGame)) {
+        HandlePutPlayerInGameReply(bytes, nBufferSize);
+    } else if (g_waitingPutPlayerInGame.load() &&
+               (op == static_cast<std::uint16_t>(RQ_ViewEquiped) ||
+                op == static_cast<std::uint16_t>(RQ_HPchanged) ||
+                op == static_cast<std::uint16_t>(RQ_ManaChanged) ||
+                op == static_cast<std::uint16_t>(RQ_ViewBackpack))) {
+        T4CNetworkDebugLogKind(
+            T4CMatrixLogKind::Phase,
+            "[PHASE] Paquet %u (%s) pendant chargement serveur — attendre opcode 13 (0x000D), "
+            "pas confondre avec 19 (0x0013 = ViewEquiped).",
+            static_cast<unsigned>(op), OpcodeLabel(op) ? OpcodeLabel(op) : "?");
+    } else if (op == static_cast<std::uint16_t>(RQ_FromPreInGameToInGame)) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Reponse RQ_FromPreInGameToInGame (46).");
     }
 }
 
@@ -833,7 +1012,13 @@ bool T4CLoginSessionStart(const std::string &hostField, const std::string &portF
 
     T4CNetworkDebugBeginSession();
     g_successAlreadyShown.store(false);
-    g_pendingSuccessDialog.store(false);
+    g_pendingCharacterList.store(false);
+    g_pendingEnterWorld.store(false);
+    g_enterWorldSpawn = {};
+    {
+        std::lock_guard<std::mutex> lock(g_characterMutex);
+        g_characterList.clear();
+    }
     g_logoutSentThisSession.store(false);
     g_lastLogin = login;
     g_lastPassword = password;
@@ -879,8 +1064,8 @@ bool T4CLoginSessionStart(const std::string &hostField, const std::string &portF
             T4CMatrixLogKind::Phase,
             "[PHASE] Pipeline Linux : **1/7** RQ_RegisterAccount (14) — **2/7** reponse 14 — "
             "**3/7** RQ_AuthenticateServerVersion (99) — **4/7** reponse 99 OK — "
-            "**5/7** post-auth — **6/7** RQ_GetPersonnalPClist (26) — **7/7** reponse 26 → monde SDL3. "
-            "Keepalive : reponse **RQ_Ack (10)** a chaque TFCStillConnected (10).");
+            "post-auth → **26** liste persos → ecran selection → **13** PutPlayerInGame → **46**+**60** → monde. "
+            "Keepalive : **RQ_Ack (10)** a chaque TFCStillConnected (10).");
 
         g_comm->SendPacket(server, const_cast<LPBYTE>(payload.data()), static_cast<int>(payload.size()), 0, 0);
         g_serverAddr = server;
@@ -927,6 +1112,20 @@ int T4CLoginSessionGetReconnectCooldownSeconds() {
 
 void T4CLoginSessionPollBackgroundTasks() {
     ReapFinishedLogoutThread();
+    if (g_waitingPutPlayerInGame.load()) {
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() -
+                                                             g_putPlayerRequestAt);
+        if (elapsed.count() >= 60) {
+            g_waitingPutPlayerInGame.store(false);
+            g_pipelineStep.store(4);
+            std::lock_guard<std::mutex> lock(g_putPlayerErrorMutex);
+            g_putPlayerErrorMessage =
+                "Delai depasse (60 s) sans reponse opcode 13 — voir stderr serveur "
+                "([load_character] / [PutPlayerInGame]) et seed SQL.";
+            T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn, "[PHASE] %s", g_putPlayerErrorMessage.c_str());
+        }
+    }
 }
 
 void T4CLoginSessionAbortLogin() {
@@ -969,13 +1168,94 @@ void T4CLoginSessionShutdown() {
     ShutdownUnlocked();
 }
 
+bool T4CLoginSessionConsumeCharacterListReady() {
+    return g_pendingCharacterList.exchange(false);
+}
+
+void T4CLoginSessionCopyCharacterList(std::vector<T4CCharacterSlot> *outSlots, int *outMaxPerAccount) {
+    if (!outSlots) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_characterMutex);
+    *outSlots = g_characterList;
+    if (outMaxPerAccount) {
+        *outMaxPerAccount = g_maxCharactersPerAccount;
+    }
+}
+
+bool T4CLoginSessionRequestPutPlayerInGame(const std::string &playerName) {
+    if (playerName.empty()) {
+        return false;
+    }
+    if (g_waitingPutPlayerInGame.load()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_sessionMutex);
+    if (!g_comm) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> errLock(g_putPlayerErrorMutex);
+        g_putPlayerErrorMessage.clear();
+    }
+    const auto pkt = BuildPutPlayerInGamePacket(playerName);
+    g_comm->SendPacket(g_serverAddr, const_cast<LPBYTE>(pkt.data()), static_cast<int>(pkt.size()), 0, 0);
+    g_pipelineStep.store(5);
+    g_waitingPutPlayerInGame.store(true);
+    g_putPlayerRequestAt = std::chrono::steady_clock::now();
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] Envoi RQ_PutPlayerInGame (13) pour « %s » (%zu octets TFC).",
+                           playerName.c_str(), pkt.size());
+    return true;
+}
+
+bool T4CLoginSessionIsWaitingPutPlayerInGame() {
+    return g_waitingPutPlayerInGame.load();
+}
+
+bool T4CLoginSessionHasPutPlayerInGameError() {
+    std::lock_guard<std::mutex> lock(g_putPlayerErrorMutex);
+    return !g_putPlayerErrorMessage.empty();
+}
+
+std::string T4CLoginSessionGetPutPlayerInGameErrorMessage() {
+    std::lock_guard<std::mutex> lock(g_putPlayerErrorMutex);
+    return g_putPlayerErrorMessage;
+}
+
+void T4CLoginSessionClearPutPlayerInGameError() {
+    std::lock_guard<std::mutex> lock(g_putPlayerErrorMutex);
+    g_putPlayerErrorMessage.clear();
+}
+
+bool T4CLoginSessionConsumeEnterWorldReady(T4CEnterWorldSpawn *outSpawn) {
+    if (!g_pendingEnterWorld.exchange(false)) {
+        return false;
+    }
+    if (outSpawn) {
+        *outSpawn = g_enterWorldSpawn;
+    }
+    return g_enterWorldSpawn.valid;
+}
+
 bool T4CLoginSessionConsumeNetworkSuccessDialog() {
-    return g_pendingSuccessDialog.exchange(false);
+    return T4CLoginSessionConsumeCharacterListReady();
 }
 
 void T4CLoginSessionResetAfterReturnToLogin() {
     g_successAlreadyShown.store(false);
-    g_pendingSuccessDialog.store(false);
+    g_pendingCharacterList.store(false);
+    g_pendingEnterWorld.store(false);
+    g_waitingPutPlayerInGame.store(false);
+    g_enterWorldSpawn = {};
+    {
+        std::lock_guard<std::mutex> lock(g_characterMutex);
+        g_characterList.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_putPlayerErrorMutex);
+        g_putPlayerErrorMessage.clear();
+    }
     g_accountBlockedAlreadyLogged.store(false);
 }
 
@@ -1008,6 +1288,34 @@ int T4CLoginSessionGetReconnectCooldownSeconds() {
 void T4CLoginSessionPollBackgroundTasks() {}
 
 void T4CLoginSessionAbortLogin() {}
+
+bool T4CLoginSessionConsumeCharacterListReady() {
+    return false;
+}
+
+void T4CLoginSessionCopyCharacterList(std::vector<T4CCharacterSlot> *, int *) {}
+
+bool T4CLoginSessionRequestPutPlayerInGame(const std::string &) {
+    return false;
+}
+
+bool T4CLoginSessionIsWaitingPutPlayerInGame() {
+    return false;
+}
+
+bool T4CLoginSessionHasPutPlayerInGameError() {
+    return false;
+}
+
+std::string T4CLoginSessionGetPutPlayerInGameErrorMessage() {
+    return {};
+}
+
+void T4CLoginSessionClearPutPlayerInGameError() {}
+
+bool T4CLoginSessionConsumeEnterWorldReady(T4CEnterWorldSpawn *) {
+    return false;
+}
 
 bool T4CLoginSessionConsumeNetworkSuccessDialog() {
     return false;

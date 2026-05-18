@@ -27,6 +27,10 @@ class GameWorldScreen {
     /** Charge VSF/carte ; false si data/sprites ou data/maps manquants. */
     bool Init(SDL_Renderer *renderer, SDL_Window *window);
 
+    /** Comme Init, avec position initiale serveur (opcode 13). */
+    bool Init(SDL_Renderer *renderer, SDL_Window *window, unsigned int locX, unsigned int locY,
+              unsigned short zone);
+
     void Shutdown();
 
     bool IsReady() const { return ready_; }

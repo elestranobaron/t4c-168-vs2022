@@ -1,6 +1,21 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
+#include <vector>
+
+struct T4CCharacterSlot {
+    std::string name;
+    std::uint16_t race{0};
+    std::uint16_t level{0};
+};
+
+struct T4CEnterWorldSpawn {
+    unsigned int x{2880};
+    unsigned int y{1083};
+    unsigned short world{0};
+    bool valid{false};
+};
 
 /**
  * Démarre la pile CCommCenter (UDP éphémère local, envoi vers host + port UDP).
@@ -33,5 +48,26 @@ void T4CLoginSessionAbortLogin();
 /** Après retour login depuis le monde : permet une nouvelle entrée en carte. */
 void T4CLoginSessionResetAfterReturnToLogin();
 
-/** À appeler depuis le thread principal : retourne true une fois si le serveur a envoyé la liste perso (RQ 26). */
+/** True une fois quand la liste persos (26) a ete recue. */
+bool T4CLoginSessionConsumeCharacterListReady();
+
+/** Copie la liste persos parsee (thread-safe). */
+void T4CLoginSessionCopyCharacterList(std::vector<T4CCharacterSlot> *outSlots, int *outMaxPerAccount);
+
+/** Envoie RQ_PutPlayerInGame (13) avec le nom choisi (une seule requete en vol). */
+bool T4CLoginSessionRequestPutPlayerInGame(const std::string &playerName);
+
+bool T4CLoginSessionIsWaitingPutPlayerInGame();
+
+bool T4CLoginSessionHasPutPlayerInGameError();
+
+/** Message d'erreur serveur (opcode 13 court) ; vide si aucune erreur. */
+std::string T4CLoginSessionGetPutPlayerInGameErrorMessage();
+
+void T4CLoginSessionClearPutPlayerInGameError();
+
+/** True une fois quand opcode 13 OK + 46/60 envoyes — spawn serveur dans *outSpawn. */
+bool T4CLoginSessionConsumeEnterWorldReady(T4CEnterWorldSpawn *outSpawn);
+
+/** @deprecated Utiliser ConsumeCharacterListReady + flux selection. */
 bool T4CLoginSessionConsumeNetworkSuccessDialog();

@@ -37,9 +37,17 @@ SDL_Surface *GameWorldScreen::makeLayer(int w, int h, bool with_alpha) {
 }
 
 bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window) {
+    return Init(renderer, window, locX_, locY_, zone_);
+}
+
+bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned int locX, unsigned int locY,
+                           unsigned short zone) {
     Shutdown();
     renderer_ = renderer;
     window_ = window;
+    locX_ = locX;
+    locY_ = locY;
+    zone_ = zone;
 
     dataRoot_ = ResolveT4CDataRoot();
     if (dataRoot_.empty()) {
