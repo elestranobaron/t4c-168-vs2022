@@ -299,6 +299,72 @@ Résolution : variable d'environnement **`T4C_DATA`**, sinon chemins relatifs au
 
 ---
 
+## Boucle temps, rendu SDL3 et synchronisation serveur
+
+Section de référence pour la **Phase 2** (mouvement, entités réseau). À ne pas confondre avec les **WDA** : le client ne les lit pas ; la cohérence en jeu passe par le **protocole TFC**, pas par recopier la grille serveur côté SDL3.
+
+### Trois couches indépendantes (ne pas les fusionner)
+
+| Couche | Où | Rôle en jeu |
+|---|---|---|
+| **WDA** | Serveur (`T4C Worlds.WDA`, BMP Storm → binaire) | Grille logique 3072×3072 : collision, zones, PNJ, scripts — **vérité serveur** |
+| **`.rmap` + `.dec`** | Client (`$T4C_DATA/maps`, `sprites`) | **Affichage** : quel sprite dessiner par case — dérivé des `.map` client via convert2, pas des WDA |
+| **TFC (UDP)** | Client ↔ serveur | Positions, `UnitUpdate`, refus de move — **seule synchro runtime** entre les deux binaires |
+
+Aligner **offline** carte affichée et monde serveur (même index de monde, conversion map correcte) est du QA / pipeline, pas une boucle `SDL_RenderPresent`. Un fixed timestep ne corrige pas un `.rmap` incohérent avec le BMP WDA.
+
+### Horloge serveur (référence pour le client)
+
+Le serveur ne tourne pas aux FPS SDL. Il utilise `TFCMAIN::GetRound()` ; dans `TFCTime.h`, `#define SECONDS * 20` → **1 round ≈ 50 ms** (20 rounds/s). Les exhausts mouvement/attaque et l’acceptation des paquets **Move (1–8)** sont exprimés en rounds (`Character.cpp`, `TFCMessagesHandler.cpp`), pas en images par seconde.
+
+Le client Windows d’origine n’envoie pas un move à chaque frame DirectX : il réagit aux entrées et aux réponses serveur. Le port SDL3 doit reproduire ce **comportement observable**, pas inventer une simulation locale plus rapide que le serveur.
+
+### État actuel du client Linux
+
+`GameWorldScreen::Update()` ne fait que **redessiner** la carte à la position reçue dans l’**opcode 13** ; il n’y a pas encore de simulation de déplacement ni de prédiction. Le risque « 144 FPS = marche 2× plus vite » n’existe **pas tant qu’on n’ajoute pas** de logique move locale.
+
+### Règles pour la Phase 2 (mouvement + rendu)
+
+**A. Séparer synchro logique et rendu**
+
+- **Chaque frame SDL** : poll événements + traiter les paquets réseau reçus (`T4CLoginSessionPollBackgroundTasks` ou file dédiée) → mettre à jour l’état « autorité serveur » (position, unités visibles).
+- **Ne pas** avancer la position affichée uniquement parce que `SDL_RenderPresent` a tourné ; la position **faisant foi** est celle confirmée ou corrigée par le serveur.
+
+**B. Fixed timestep (quand il y aura prédiction / animation)**
+
+Quand on interpolera le perso entre deux positions serveur :
+
+```
+accumuler dt (SDL_GetTicks)
+tant que accum >= 50 ms :
+    mise à jour état client (timers UI, file d’inputs à envoyer)
+    accum -= 50 ms
+alpha = accum / 50 ms
+rendu : interpoler(pos_précédente, pos_serveur, alpha)
+SDL_RenderPresent()  // framerate libre
+```
+
+L’interpolation est du **confort visuel** ; en cas d’écart, le paquet serveur gagne (rubber-band), comme sur le client Windows.
+
+**C. Ne pas spammer le réseau**
+
+- Ne pas envoyer un opcode Move **à chaque** tick logique 50 ms sans garde — respecter les exhausts côté serveur et le rythme du client d’origine (input / séquence de marche).
+- La collision « case bloquée » est **côté serveur** (WDA) ; le client affiche et propose un move ; le serveur accepte ou refuse.
+
+**D. Pas de lecture WDA sous SDL3**
+
+Inutile et hors scope : pas de `T4C Worlds.WDA` dans le client. Pour « ne pas dériver » : opcodes + `$T4C_DATA` aligné + logs ; pas un second moteur physique client calqué sur le BMP Storm.
+
+### Fichiers cibles (implémentation future)
+
+| Fichier | Rôle prévu |
+|---|---|
+| `src/game/GameWorldScreen.cpp` | Boucle rendu + input move → enqueue paquets |
+| `src/network/T4CLoginSession.cpp` | Handlers opcodes 1–8, 69, 16, 60 — mise à jour état monde |
+| `CLIENT168_RC14h_OK/.../packethandling.cpp` | Référence comportement Windows (quand envoyer quoi) |
+
+---
+
 ## Trois formats, trois couches qui ne se touchent presque pas
 
 Avant de parler roadmap, il faut nommer correctement les trois formats qui circulent dans ce projet. Ils sont régulièrement confondus (y compris dans certaines anciennes notes), mais ils vivent dans des couches indépendantes.
@@ -672,7 +738,7 @@ Chaque étape a un critère d'acceptation **observable** (log client `debug/t4c_
 
 #### Phase 2 — Parité rendu et monde réseau (priorité Linux, référence DirectX)
 
-C'est la **nouvelle dimension** : même ressenti visuel/sonore que Windows, puis mêmes opcodes « monde ».
+C'est la **nouvelle dimension** : même ressenti visuel/sonore que Windows, puis mêmes opcodes « monde ». Voir [Boucle temps, rendu SDL3 et synchronisation serveur](#boucle-temps-rendu-sdl3-et-synchronisation-serveur) pour les règles fixed timestep / WDA vs TFC avant d’implémenter le mouvement.
 
 ```
 [ ] B0 — Documenter / figer $T4C_DATA (copie depuis convert2 ou install Rebirth convertie)
