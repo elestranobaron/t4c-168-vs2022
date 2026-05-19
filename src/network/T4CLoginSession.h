@@ -17,6 +17,22 @@ struct T4CEnterWorldSpawn {
     bool valid{false};
 };
 
+/** Perso actif (selection + sync serveur PacketPopup type 10004). */
+struct T4CActivePlayer {
+    std::string name;
+    std::uint16_t race{0};
+    /** ID apparence serveur (10001–10004 mâle, 15001–15004 femelle). 0 = déduire de race. */
+    std::uint16_t appearance{0};
+    unsigned int serverX{0};
+    unsigned int serverY{0};
+    std::int32_t unitId{0};
+    bool female{false};
+    bool valid{false};
+};
+
+/** Nom NPCList / spr_pal pour le sprite PC (ex. « Thief », « Warrio »). */
+const char *T4CPlayerSpriteNpcName(const T4CActivePlayer &player);
+
 /**
  * Démarre la pile CCommCenter (UDP éphémère local, envoi vers host + port UDP).
  * hostField : IPv4 ou nom d'hôte (suffixe :port optionnel ignoré au profit de portField).
@@ -71,6 +87,18 @@ void T4CLoginSessionClearPutPlayerInGameError();
 
 /** True une fois quand opcode 13 OK + 46/60 envoyes — spawn serveur dans *outSpawn. */
 bool T4CLoginSessionConsumeEnterWorldReady(T4CEnterWorldSpawn *outSpawn);
+
+/** Copie le perso choisi (race, nom) + dernier PacketPopup 10004 si reçu. */
+void T4CLoginSessionGetActivePlayer(T4CActivePlayer *outPlayer);
+
+/** True une fois par nouveau PacketPopup 10004 (position / apparence serveur). */
+bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *outPlayer);
+
+/** Envoie un déplacement (opcodes 1–8, aligné TFCSocket.cpp). Retourne false si pas en jeu. */
+bool T4CLoginSessionSendMove(std::uint16_t moveOpcode);
+
+/** Met a jour les coords affichees du perso actif (apres mouvement local). */
+void T4CLoginSessionUpdateActivePlayerPosition(unsigned int x, unsigned int y);
 
 /** @deprecated Utiliser ConsumeCharacterListReady + flux selection. */
 bool T4CLoginSessionConsumeNetworkSuccessDialog();

@@ -4070,6 +4070,7 @@ int main(int argc, char *argv[])
                     T4CLoginSessionResetAfterReturnToLogin();
                     phase = AppPhase::Login;
                     SDL_SetWindowTitle(window, "T4C (Linux SDL3)");
+                    SDL_SetWindowSize(window, 800, 600);
                     SDL_SetRenderLogicalPresentation(renderer,
                                                      LoginScreen::kLogicalWidth,
                                                      LoginScreen::kLogicalHeight,
@@ -4110,6 +4111,7 @@ int main(int argc, char *argv[])
                 if (world.Init(renderer, window, spawn.x, spawn.y, spawn.world)) {
                     phase = AppPhase::World;
                     SDL_SetWindowTitle(window, "T4C — monde (SDL3)");
+                    SDL_SetWindowSize(window, 1600, 900);
                     SDL_SetRenderLogicalPresentation(renderer,
                                                      GameWorldScreen::kLogicalWidth,
                                                      GameWorldScreen::kLogicalHeight,

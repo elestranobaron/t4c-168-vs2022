@@ -2,9 +2,10 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstdint>
 #include <string>
 
-#include "render/Sdl3FramePresenter.h"
+#include "Sdl3FramePresenter.h"
 
 class FontManager;
 class MAPInterface;
@@ -24,10 +25,7 @@ class GameWorldScreen {
     GameWorldScreen(const GameWorldScreen &) = delete;
     GameWorldScreen &operator=(const GameWorldScreen &) = delete;
 
-    /** Charge VSF/carte ; false si data/sprites ou data/maps manquants. */
     bool Init(SDL_Renderer *renderer, SDL_Window *window);
-
-    /** Comme Init, avec position initiale serveur (opcode 13). */
     bool Init(SDL_Renderer *renderer, SDL_Window *window, unsigned int locX, unsigned int locY,
               unsigned short zone);
 
@@ -39,7 +37,6 @@ class GameWorldScreen {
 
     bool HandleEvent(const SDL_Event &event);
 
-    /** true une fois après SDLK_ESCAPE en monde (retour écran login). */
     bool ConsumeReturnToLogin();
 
     void Update();
@@ -47,8 +44,20 @@ class GameWorldScreen {
     void Render(SDL_Renderer *renderer);
 
    private:
+    /** Vitesse move_to TnC (plus grand = plus rapide). */
+    static constexpr unsigned short kMoveVisualSpeed = 4;
+    /** Frames par case (~32*mul/speed) ; depl ralenti en meme temps dans move_to. */
+    static constexpr unsigned short kMoveVisualStepsMul = 15;
+
     static char *DupCStr(const std::string &s);
+
     void redraw();
+    void syncCameraToPlayer();
+    void snapPlayerVisual(unsigned int x, unsigned int y);
+    void setPlayerFacingFromDelta(int dx, int dy);
+    void setPlayerWalkAnim(bool walking);
+    void pollHeldMovement();
+    bool tryMovePlayer(std::uint16_t moveOpcode);
     SDL_Surface *makeLayer(int w, int h, bool with_alpha);
 
     SDL_Renderer *renderer_{nullptr};
@@ -58,7 +67,6 @@ class GameWorldScreen {
     SDL_Surface *screen_{nullptr};
     SDL_Surface *sol_{nullptr};
     SDL_Surface *decor_{nullptr};
-    SDL_Surface *env_{nullptr};
 
     VSFInterface *vsfi_{nullptr};
     MAPInterface *mapi_{nullptr};
@@ -69,11 +77,14 @@ class GameWorldScreen {
 
     unsigned int locX_{2880};
     unsigned int locY_{1083};
+    unsigned int playerX_{2880};
+    unsigned int playerY_{1083};
     unsigned short zone_{0};
     bool mapFlag_{true};
     bool dispInfos_{false};
     bool ready_{false};
     bool returnToLogin_{false};
+    bool playerNpcSpawned_{false};
     float fps_{0.f};
     std::string dataRoot_;
     std::string lastError_;

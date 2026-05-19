@@ -49,6 +49,7 @@ set(TNC_GRAPHICAL_SOURCES
 
 set(TNC_GRAPHICAL_INCLUDES
     ${CMAKE_SOURCE_DIR}/third_party/tnc_sdl3/include
+    ${CMAKE_SOURCE_DIR}/third_party/tnc_sdl3/render
     ${TNC_GRAPHICAL_ROOT}
 )
 

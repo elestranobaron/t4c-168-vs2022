@@ -99,8 +99,20 @@ inline int TNC_SetColorKey(SDL_Surface *surface, int flag, Uint32 key) {
 #undef SDL_SetColorKey
 #define SDL_SetColorKey(surface, flag, key) TNC_SetColorKey(surface, flag, key)
 
+/** Couleur 0xAARRGGBB telle que TnC (Noth) l'utilisait avec masques ARGB8888. */
+inline Uint32 TNC_MapArgb(SDL_Surface *surface, Uint32 argb) {
+    if (!surface) {
+        return argb;
+    }
+    const Uint8 a = static_cast<Uint8>((argb >> 24) & 0xFFu);
+    const Uint8 r = static_cast<Uint8>((argb >> 16) & 0xFFu);
+    const Uint8 g = static_cast<Uint8>((argb >> 8) & 0xFFu);
+    const Uint8 b = static_cast<Uint8>(argb & 0xFFu);
+    return SDL_MapSurfaceRGBA(surface, r, g, b, a);
+}
+
 inline int TNC_FillRect(SDL_Surface *dst, const SDL_Rect *rect, Uint32 color) {
-    return SDL_FillSurfaceRect(dst, rect, color) ? 0 : -1;
+    return SDL_FillSurfaceRect(dst, rect, TNC_MapArgb(dst, color)) ? 0 : -1;
 }
 #undef SDL_FillRect
 #define SDL_FillRect(dst, rect, color) TNC_FillRect(dst, rect, color)

@@ -77,6 +77,13 @@ static std::atomic<bool> g_pendingPost13Pipeline{false};
 /** -1 inconnu, 0 OK, 1 erreur (octet resultat paquet 46). */
 static std::atomic<int> g_fromPreInGameResult{-1};
 
+/** Unit::PacketPopup — type filaire 10004 (position + apparence), pas un RQ_GetStatus. */
+static constexpr std::uint16_t kTfcPacketPopup = 10004;
+
+static T4CActivePlayer g_activePlayer{};
+static std::mutex g_activePlayerMutex;
+static std::atomic<bool> g_playerPopupPending{false};
+
 constexpr std::uint16_t kTfcStillConnected = 10; /* TFCSocket.h — serveur ; reponse = RQ_Ack (10) */
 
 /** Long opcode 99 : egale `TFCServer->dwVersion` (INI Version=14, pas le libelle produit « 1.68 »). Voir main.cpp : `Send << (long)Player.Version`. */
@@ -506,6 +513,14 @@ static void HandlePutPlayerInGameReply(const unsigned char *data, int len) {
     spawn.valid = true;
     g_enterWorldSpawn = spawn;
 
+    {
+        std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+        if (g_activePlayer.valid) {
+            g_activePlayer.serverX = spawn.x;
+            g_activePlayer.serverY = spawn.y;
+        }
+    }
+
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
                            "[PHASE] RQ_PutPlayerInGame (13) OK — position %u,%u monde %u.",
                            spawn.x, spawn.y, static_cast<unsigned>(spawn.world));
@@ -604,6 +619,79 @@ static std::uint16_t ReadOpcodeFromTfcpayload(const unsigned char *data, int len
     const unsigned hi = data[4];
     const unsigned lo = data[5];
     return static_cast<std::uint16_t>((hi << 8) | lo);
+}
+
+static int ClassIndexFromAppearance(std::uint16_t appearance) {
+    if (appearance >= 10001 && appearance <= 10004) {
+        return static_cast<int>(appearance - 10001);
+    }
+    if (appearance >= 15001 && appearance <= 15004) {
+        return static_cast<int>(appearance - 15001);
+    }
+    return -1;
+}
+
+static bool IsFemaleAppearance(std::uint16_t appearance) {
+    return appearance == 10012 || appearance == 15012 || (appearance >= 15001 && appearance <= 15004);
+}
+
+const char *T4CPlayerSpriteNpcName(const T4CActivePlayer &player) {
+    static const char *const kClassSprites[] = {"Warrio", "Wizard", "Cleric", "Thief"};
+    int cls = ClassIndexFromAppearance(player.appearance);
+    if (cls < 0) {
+        cls = static_cast<int>(player.race);
+    }
+    if (cls < 0 || cls > 3) {
+        cls = 0;
+    }
+    return kClassSprites[cls];
+}
+
+static void ApplyServerUnitPosition(const unsigned char *data, int len) {
+    if (!data || len < 10 || !TfcHeaderLooksSane(data, len)) {
+        return;
+    }
+    const std::int16_t sx = static_cast<std::int16_t>(ReadBeUint16(data, 6, len));
+    const std::int16_t sy = static_cast<std::int16_t>(ReadBeUint16(data, 8, len));
+    if (sx < 0 || sy < 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+    g_activePlayer.serverX = static_cast<unsigned int>(sx);
+    g_activePlayer.serverY = static_cast<unsigned int>(sy);
+    g_activePlayer.valid = true;
+    g_playerPopupPending.store(true);
+}
+
+static void HandlePacketPopup(const unsigned char *data, int len) {
+    if (!data || len < 16 || !TfcHeaderLooksSane(data, len)) {
+        return;
+    }
+    const std::int16_t sx = static_cast<std::int16_t>(ReadBeUint16(data, 6, len));
+    const std::int16_t sy = static_cast<std::int16_t>(ReadBeUint16(data, 8, len));
+    const std::uint16_t appearance = ReadBeUint16(data, 10, len);
+    const std::int32_t unitId = ReadBeInt32Msf(data, 12, len);
+
+    std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+    if (sx >= 0) {
+        g_activePlayer.serverX = static_cast<unsigned int>(sx);
+    }
+    if (sy >= 0) {
+        g_activePlayer.serverY = static_cast<unsigned int>(sy);
+    }
+    if (appearance != 0) {
+        g_activePlayer.appearance = appearance;
+        g_activePlayer.female = IsFemaleAppearance(appearance);
+    }
+    g_activePlayer.unitId = unitId;
+    g_activePlayer.valid = true;
+    g_playerPopupPending.store(true);
+
+    T4CNetworkDebugLogKind(
+        T4CMatrixLogKind::Phase,
+        "[PHASE] PacketPopup (10004) : pos %u,%u appearance=%u id=%d sprite=%s%s.",
+        g_activePlayer.serverX, g_activePlayer.serverY, static_cast<unsigned>(appearance), static_cast<int>(unitId),
+        T4CPlayerSpriteNpcName(g_activePlayer), g_activePlayer.female ? " (F)" : "");
 }
 
 /** Aligné sur TFCSocket.h (codes client 1.68) + envoi serveur `sending << (char)N` après l’opcode. */
@@ -914,6 +1002,21 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
         T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
                                "[PHASE] Reponse RQ_FromPreInGameToInGame (46) code=%d.",
                                resultCode);
+    } else if (op == kTfcPacketPopup) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                               "[PHASE] PacketPopup (10004) unite joueur — position / apparence.");
+        HandlePacketPopup(bytes, nBufferSize);
+    } else if (op == 1 && g_pipelineStep.load() >= 6 && g_fromPreInGameResult.load() == 0) {
+        ApplyServerUnitPosition(bytes, nBufferSize);
+        unsigned int sx = 0;
+        unsigned int sy = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+            sx = g_activePlayer.serverX;
+            sy = g_activePlayer.serverY;
+        }
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                               "[PHASE] Reponse deplacement (1) — position serveur @ %u,%u.", sx, sy);
     }
 }
 
@@ -1140,7 +1243,15 @@ std::string T4CLoginSessionGetWorldHudLine() {
     }
     const int r46 = g_fromPreInGameResult.load();
     if (r46 == 0) {
-        return "Reseau: en jeu (46 OK) | fleches = carte locale";
+        T4CActivePlayer ap{};
+        T4CLoginSessionGetActivePlayer(&ap);
+        if (ap.valid) {
+            char buf[192];
+            std::snprintf(buf, sizeof(buf), "En jeu | %s @ %u,%u | fleches=move",
+                          ap.name.c_str(), ap.serverX, ap.serverY);
+            return buf;
+        }
+        return "Reseau: en jeu (46 OK) | fleches = deplacement";
     }
     if (r46 == 1) {
         return "Reseau: erreur 46 (unit monde?) | fleches = carte locale";
@@ -1231,6 +1342,21 @@ bool T4CLoginSessionRequestPutPlayerInGame(const std::string &playerName) {
     if (g_waitingPutPlayerInGame.load()) {
         return false;
     }
+    {
+        std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+        g_activePlayer = {};
+        g_activePlayer.name = playerName;
+        g_activePlayer.valid = true;
+        std::lock_guard<std::mutex> clist(g_characterMutex);
+        for (const T4CCharacterSlot &slot : g_characterList) {
+            if (slot.name == playerName) {
+                g_activePlayer.race = slot.race;
+                break;
+            }
+        }
+    }
+    g_playerPopupPending.store(false);
+
     std::lock_guard<std::mutex> lock(g_sessionMutex);
     if (!g_comm) {
         return false;
@@ -1279,6 +1405,47 @@ bool T4CLoginSessionConsumeEnterWorldReady(T4CEnterWorldSpawn *outSpawn) {
     return g_enterWorldSpawn.valid;
 }
 
+void T4CLoginSessionGetActivePlayer(T4CActivePlayer *outPlayer) {
+    if (!outPlayer) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+    *outPlayer = g_activePlayer;
+}
+
+bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *outPlayer) {
+    if (!g_playerPopupPending.exchange(false)) {
+        return false;
+    }
+    T4CLoginSessionGetActivePlayer(outPlayer);
+    return outPlayer && outPlayer->valid;
+}
+
+void T4CLoginSessionUpdateActivePlayerPosition(const unsigned int x, const unsigned int y) {
+    std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+    if (g_activePlayer.valid) {
+        g_activePlayer.serverX = x;
+        g_activePlayer.serverY = y;
+    }
+}
+
+bool T4CLoginSessionSendMove(const std::uint16_t moveOpcode) {
+    if (moveOpcode < 1 || moveOpcode > 8) {
+        return false;
+    }
+    if (g_pipelineStep.load() < 6 || g_fromPreInGameResult.load() != 0) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_sessionMutex);
+    if (!g_comm) {
+        return false;
+    }
+    const auto pkt = BuildOpcodeOnlyPacket(moveOpcode);
+    g_comm->SendPacket(g_serverAddr, const_cast<LPBYTE>(pkt.data()), static_cast<int>(pkt.size()), 0, 0);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Envoi deplacement opcode %u.", static_cast<unsigned>(moveOpcode));
+    return true;
+}
+
 bool T4CLoginSessionConsumeNetworkSuccessDialog() {
     return T4CLoginSessionConsumeCharacterListReady();
 }
@@ -1292,6 +1459,11 @@ void T4CLoginSessionResetAfterReturnToLogin() {
     g_pendingPost13Pipeline.store(false);
     g_fromPreInGameResult.store(-1);
     g_enterWorldSpawn = {};
+    g_playerPopupPending.store(false);
+    {
+        std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+        g_activePlayer = {};
+    }
     {
         std::lock_guard<std::mutex> lock(g_characterMutex);
         g_characterList.clear();
@@ -1363,6 +1535,22 @@ void T4CLoginSessionClearPutPlayerInGameError() {}
 
 bool T4CLoginSessionConsumeEnterWorldReady(T4CEnterWorldSpawn *) {
     return false;
+}
+
+void T4CLoginSessionGetActivePlayer(T4CActivePlayer *) {}
+
+bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *) {
+    return false;
+}
+
+bool T4CLoginSessionSendMove(std::uint16_t) {
+    return false;
+}
+
+void T4CLoginSessionUpdateActivePlayerPosition(unsigned int, unsigned int) {}
+
+const char *T4CPlayerSpriteNpcName(const T4CActivePlayer &) {
+    return "Warrio";
 }
 
 bool T4CLoginSessionConsumeNetworkSuccessDialog() {

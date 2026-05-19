@@ -47,10 +47,21 @@ void Sdl3FramePresenter::present(SDL_Surface *frame, int logicalW, int logicalH)
         return;
     }
 
+    SDL_SetTextureBlendMode(texture_, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureColorModFloat(texture_, 1.f, 1.f, 1.f);
+    SDL_SetTextureAlphaMod(texture_, 255);
+
     SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
     SDL_RenderClear(renderer_);
 
+    const float scale = brightnessScale_;
+    if (scale > 1.001f || scale < 0.999f) {
+        SDL_SetRenderColorScale(renderer_, scale);
+    }
     SDL_FRect dst{0.f, 0.f, static_cast<float>(logicalW), static_cast<float>(logicalH)};
     SDL_RenderTexture(renderer_, texture_, nullptr, &dst);
+    if (scale > 1.001f || scale < 0.999f) {
+        SDL_SetRenderColorScale(renderer_, 1.f);
+    }
     SDL_RenderPresent(renderer_);
 }

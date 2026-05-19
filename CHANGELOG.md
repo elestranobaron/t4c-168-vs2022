@@ -135,3 +135,117 @@ Handlers monde : opcodes **1–8** (mouvement), **16** (objets périphériques),
 
 ### Sécurité
 - Mise à jour du `.gitignore` pour ignorer explicitement les volumineux sous-dossiers de données (`sprites/`, `maps/`, `sons/`) afin d'éviter tout commit accidentel d'assets volumineux (~325 Mo).
+
+---
+
+## 2026-05-19 — Vue monde jouable (déplacement local, rendu SDL3, perso réseau)
+
+### Contexte
+
+Suite à l’entrée en jeu validée (13 → 18 → 46/60), travail sur **Phase 2** : afficher et déplacer le personnage dans `GameWorldScreen` avec les assets `$T4C_DATA`, en restant aligné sur le client Windows 1.68 (`TFCSocket.cpp`, `Tileset.cpp`, `packethandling.cpp`).
+
+**État actuel (démo jouable, pas « on joue » complet) :** carte isométrique TnC, sprite joueur, flèches / pavé numérique, envoi réseau des opcodes **1–8**, glissement visuel `move_to`, luminosité F4/F5. La vitesse de marche et l’animation des jambes restent **trop rapides** par rapport au ressenti Windows ; le snap serveur sur opcode **1** peut couper l’animation si on ne le gère pas finement (tentative « ack glide » annulée — bloquait le déplacement).
+
+---
+
+### Réalisé (client Linux / SDL3)
+
+#### `src/game/GameWorldScreen.cpp` / `GameWorldScreen.h`
+
+- **Déplacement clavier** : flèches + pavé numérique ; maintien des touches via `pollHeldMovement()` dans `Update()`.
+- **Opcodes réseau** : `tryMovePlayer()` → `T4CLoginSessionSendMove(1–8)` (grille `TFCSocket.cpp` : N/E/S/O + diagonales).
+- **Orientation sprite** : angles VSF (0°, 45°, …) dérivés de `TileSet::MoveToPosition` / directions internes 1–9 du client 1.68 (correction du mapping « boussole » initial qui affichait de mauvais profils).
+- **Glissement visuel** : `NPCManager::move_to()` avec `steps_mul` (durée **et** pas par frame ralentis ensemble dans `npcmanager.cpp`) ; `is_moving()` pour enchaîner un pas à la fois ; caméra (`locX_`/`locY_`) mise à jour à la fin du glide, pas à chaque `set_world_pos`.
+- **Perso** : spawn via `NPCList.txt` + `T4CPlayerSpriteNpcName()` (apparence PacketPopup **10004** / race) ; actions `'D'` marche / `'S'` idle.
+- **Luminosité** : F4/F5 sur `Sdl3FramePresenter` (`SDL_SetRenderColorScale`, défaut ~1.2) — sans modifier les pixels carte (échec gamma CPU / `SDL_LockSurface`).
+- **Fenêtre monde** : résolution logique 1800×1000 ; `main.cpp` agrandit la fenêtre SDL en phase monde (~1600×900).
+- **Annulé (régression)** : file d’attente `moveInProgress_` + ignore snap serveur sur ack opcode 1 — bloquait tout mouvement ; retour au flux simple (snap sur popup, `playerX_` mis à jour au pas).
+
+#### `src/network/T4CLoginSession.cpp` / `.h`
+
+- **`T4CLoginSessionSendMove`** : paquet TFC opcode seul (1–8), si pipeline in-game (étape ≥ 6, 46 OK).
+- **Opcode 1** (réponse move) : `ApplyServerUnitPosition` + `g_playerPopupPending` → `ConsumePlayerPopupUpdate` dans `GameWorldScreen` (sync position serveur).
+- **`T4CActivePlayer`** : nom, race, appearance, `serverX/Y`, `unitId`, sprite dérivé pour le rendu.
+
+#### TnC (`client_graphical_sdl3_test/TnC_dev/` via `cmake/TncGraphical.cmake`)
+
+- **`NPCManager::set_world_pos`** : position immédiate (sync serveur / téléport).
+- **`NPCManager::is_moving`** : état animation `move_to`.
+- **`NPCManager::move_to(..., steps_mul)`** : paramètre `steps_mul` pour ralentir proprement (ne pas multiplier seulement `duree_depl` sans `depl_x`/`depl_y` — sinon le sprite traverse la case en ~8 frames quoi qu’il arrive).
+- Constante client : `kMoveVisualSpeed = 4`, `kMoveVisualStepsMul = 15` (à tuner).
+
+#### `third_party/tnc_sdl3/`
+
+- **`Sdl3FramePresenter`** : présentation surface → texture SDL3, scale luminosité rendu.
+
+#### Données & build
+
+- **`client/data/`** + `scripts/assemble_t4c_data.sh` : layout runtime unifié (`sprites/`, `maps/`, `sons/`, fonts, `NPCList.txt`).
+- **`cmake/TncGraphical.cmake`** : sources TnC compilées dans `t4c_client` (pas de binaire TnC séparé).
+
+---
+
+### Limites connues (à traiter)
+
+| Sujet | Détail |
+|--------|--------|
+| **Vitesse marche / jambes** | Animation marche toujours pilotée par `ANIM_FPS` (15) dans `npc_draw.cpp`, indépendante de `move_to` ; déplacement perçu encore rapide si le serveur **snap** sur opcode 1 (`snapPlayerVisual` → `set_world_pos` annule le glide). Réglage fin : `kMoveVisualStepsMul`, éventuellement ne pas snap si ack = position prédite (sans bloquer le jeu). |
+| **Carte** | `get_map` → `full_redraw` à chaque pas caméra (pas de scroll `move_map`) — saccades possibles. |
+| **Collision** | Autorité serveur (WDA) ; pas d’affichage client du refus de move (opcode 1 sans déplacement). |
+| **Autres joueurs / PNJ** | Pas de rendu des unités réseau (opcode **69** `UnitUpdate`, etc.). |
+| **Objets sol** | Opcode **16** (peripheric objects) non géré à l’écran. |
+| **Musique / SFX** | Fichiers WAV sous `data/sons/` présents ; pas de `GameMusic.cpp` / SDL_mixer — pas de « Sadness Music » ni musique de zone après 13. |
+| **Opcodes monde** | Beaucoup de paquets post-46 seulement **logués** (**43** stats, **60** near units, **131**, chat, combat, loot, UI…) — voir `CLIENT168_RC14h_OK/.../packethandling.cpp`. |
+| **WDA côté client** | **Hors scope** — le client ne lit jamais les `.WDA`. |
+
+---
+
+### À faire — priorité recommandée
+
+#### Serveur (`T4C_Server_Linux_Final_Step`, hors dépôt client)
+
+- [ ] **Démarrer sans workarounds de boot** : retirer ou rendre optionnels les contournements actuels (**skip creature**, **skip ground object**, **éjection / retrait NPC WDA** ou chargement NPCs.WDA dégradé) une fois le chargement WDA 1.68 LP64 stable (`second_approach/`, `key_swaps/`).
+- [ ] Valider **WDA Worlds + Edit + NPCs** avec la bonne clé XOR 1.68 (LCG) et structures LP64 — le client en dépend indirectement (collisions, spawns, refus de move).
+
+#### Client — réseau (`T4CLoginSession`)
+
+- [ ] Handlers structurés pour les opcodes monde (réf. `packethandling.cpp`), au minimum :
+  - **9** — `GetPlayerPos` / synchro position
+  - **43** — stats / HUD joueur
+  - **60** — unités proches (compléter au-delà du log)
+  - **69** — `UnitUpdate` (autres entités visibles)
+  - **16** — objets au sol autour du joueur
+  - **131** et flux déjà reçus en rafale après 46 — identifier et classer
+- [ ] Ne pas spammer les moves : respecter le rythme ~50 ms / round serveur ; file d’inputs si besoin.
+- [ ] Snap serveur opcode **1** : corriger sans bloquer (ex. ignorer snap si coords = position déjà envoyée **pendant** le glide).
+
+#### Client — rendu / gameplay (`GameWorldScreen`, TnC)
+
+- [ ] Régler définitivement **vitesse + animation jambes** (lier frame marche à `tps_depl`/`duree_depl` ou ralentir `ANIM_FPS` pour le joueur id 0).
+- [ ] Scroll carte **`move_map`** au lieu de `full_redraw` systématique (TnC a `mapi_move_map.cpp`).
+- [ ] Opcodes **9** + caméra si le serveur corrige la position hors opcode 1.
+- [ ] Pas de torche `env_` / fond gris (reverts documentés — artefacts).
+
+#### Client — audio
+
+- [ ] Porter **`GameMusic.cpp`** / **`NewSound.cpp`** : DirectSound → SDL3 audio ou SDL_mixer.
+- [ ] Pistes : `"Sadness Music"` (liste persos), puis `LoadNewSound()` après opcode **13** (zone + coords), fichiers sous `$T4C_DATA/sons/`.
+
+#### Client — polish & ops
+
+- [ ] MOTD opcodes **65** / **66** (cosmétique login).
+- [ ] CI Linux : build + smoke handshake UDP (trace `debug/t4c_network_session.log`).
+- [ ] Commits séparés : `key_swaps/`, `second_approach/` (outils WDA, pas le runtime client).
+
+---
+
+### Fichiers touchés (session mouvement / rendu, hors `data/` binaire)
+
+| Zone | Fichiers principaux |
+|------|---------------------|
+| Monde | `src/game/GameWorldScreen.cpp`, `GameWorldScreen.h`, `TncDataPaths.cpp` |
+| Réseau | `src/network/T4CLoginSession.cpp`, `.h` |
+| Présentation | `third_party/tnc_sdl3/render/Sdl3FramePresenter.cpp`, `.h`, `tnc_sdl2_compat.h` |
+| Build | `CMakeLists.txt`, `cmake/TncGraphical.cmake` |
+| TnC embarqué | `client_graphical_sdl3_test/TnC_dev/NPCManager/*`, (miroir `client_graphical_path_to_follow/decode/TnC_dev/`) |
+| App | `src/main.cpp` |
