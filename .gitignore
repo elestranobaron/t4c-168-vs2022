@@ -4,6 +4,7 @@
 x64/
 x86/
 build/
+build_backup_*/
 
 # Assets runtime copiés (~300 Mo) — voir data/README.md et scripts/assemble_t4c_data.sh
 /data/sprites/

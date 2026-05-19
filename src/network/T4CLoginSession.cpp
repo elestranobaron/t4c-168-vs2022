@@ -72,6 +72,8 @@ static std::string g_putPlayerErrorMessage;
 static std::chrono::steady_clock::time_point g_putPlayerRequestAt{};
 /** Apres envoi opcode 46, en attente de la reponse serveur. */
 static std::atomic<bool> g_waitingFromPreInGame{false};
+/** 13 OK : envoyer 46+60 apres opcode 18 (comme la fin du flux 13 cote serveur). */
+static std::atomic<bool> g_pendingPost13Pipeline{false};
 /** -1 inconnu, 0 OK, 1 erreur (octet resultat paquet 46). */
 static std::atomic<int> g_fromPreInGameResult{-1};
 
@@ -509,8 +511,7 @@ static void HandlePutPlayerInGameReply(const unsigned char *data, int len) {
                            spawn.x, spawn.y, static_cast<unsigned>(spawn.world));
 
     if (g_pipelineStep.load() >= 3) {
-        SendFromPreInGameToInGameLocked();
-        SendGetNearItemsLocked();
+        g_pendingPost13Pipeline.store(true);
         g_pipelineStep.store(6);
         g_pendingEnterWorld.store(true);
     }
@@ -884,11 +885,20 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
         }
     } else if (op == static_cast<std::uint16_t>(RQ_PutPlayerInGame)) {
         HandlePutPlayerInGameReply(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_ViewBackpack)) {
+        T4CNetworkDebugLogKind(
+            T4CMatrixLogKind::Phase,
+            "[PHASE] Opcode 18 (ViewBackpack) — fin du chargement 13 cote serveur.");
+        if (g_pendingPost13Pipeline.exchange(false)) {
+            SendFromPreInGameToInGameLocked();
+            SendGetNearItemsLocked();
+            T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                                   "[PHASE] Apres 18 : envoi 46 puis 60 (aligne Windows / serveur boPreInGame).");
+        }
     } else if (g_waitingPutPlayerInGame.load() &&
                (op == static_cast<std::uint16_t>(RQ_ViewEquiped) ||
                 op == static_cast<std::uint16_t>(RQ_HPchanged) ||
-                op == static_cast<std::uint16_t>(RQ_ManaChanged) ||
-                op == static_cast<std::uint16_t>(RQ_ViewBackpack))) {
+                op == static_cast<std::uint16_t>(RQ_ManaChanged))) {
         T4CNetworkDebugLogKind(
             T4CMatrixLogKind::Phase,
             "[PHASE] Paquet %u (%s) pendant chargement serveur — attendre opcode 13 (0x000D), "
@@ -1279,6 +1289,7 @@ void T4CLoginSessionResetAfterReturnToLogin() {
     g_pendingEnterWorld.store(false);
     g_waitingPutPlayerInGame.store(false);
     g_waitingFromPreInGame.store(false);
+    g_pendingPost13Pipeline.store(false);
     g_fromPreInGameResult.store(-1);
     g_enterWorldSpawn = {};
     {
