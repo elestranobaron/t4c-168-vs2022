@@ -83,6 +83,8 @@ static constexpr std::uint16_t kTfcPacketPopup = 10004;
 static T4CActivePlayer g_activePlayer{};
 static std::mutex g_activePlayerMutex;
 static std::atomic<bool> g_playerPopupPending{false};
+static T4CPlayerTeleport g_pendingTeleport{};
+static std::atomic<bool> g_playerTeleportPending{false};
 
 constexpr std::uint16_t kTfcStillConnected = 10; /* TFCSocket.h — serveur ; reponse = RQ_Ack (10) */
 
@@ -663,6 +665,40 @@ static void ApplyServerUnitPosition(const unsigned char *data, int len) {
     g_playerPopupPending.store(true);
 }
 
+static void HandleTeleportPlayer(const unsigned char *data, int len) {
+    if (!data || len < 12 || !TfcHeaderLooksSane(data, len)) {
+        return;
+    }
+    const std::int16_t x = static_cast<std::int16_t>(ReadBeUint16(data, 6, len));
+    const std::int16_t y = static_cast<std::int16_t>(ReadBeUint16(data, 8, len));
+    const std::int16_t world = static_cast<std::int16_t>(ReadBeUint16(data, 10, len));
+    if (x < 0 || y < 0 || world < 0) {
+        return;
+    }
+
+    g_pendingTeleport.x = static_cast<unsigned int>(x);
+    g_pendingTeleport.y = static_cast<unsigned int>(y);
+    g_pendingTeleport.world = static_cast<unsigned short>(world);
+
+    {
+        std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+        g_activePlayer.serverX = g_pendingTeleport.x;
+        g_activePlayer.serverY = g_pendingTeleport.y;
+        g_activePlayer.valid = true;
+    }
+
+    g_playerPopupPending.store(false);
+    g_playerTeleportPending.store(true);
+
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_TeleportPlayer (57) : @ %u,%u monde %u.",
+                           g_pendingTeleport.x, g_pendingTeleport.y,
+                           static_cast<unsigned>(g_pendingTeleport.world));
+
+    SendGetNearItemsLocked();
+    SendFromPreInGameToInGameLocked();
+}
+
 static void HandlePacketPopup(const unsigned char *data, int len) {
     if (!data || len < 16 || !TfcHeaderLooksSane(data, len)) {
         return;
@@ -1006,6 +1042,9 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
         T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
                                "[PHASE] PacketPopup (10004) unite joueur — position / apparence.");
         HandlePacketPopup(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_TeleportPlayer) && g_pipelineStep.load() >= 6 &&
+               g_fromPreInGameResult.load() == 0) {
+        HandleTeleportPlayer(bytes, nBufferSize);
     } else if (op == 1 && g_pipelineStep.load() >= 6 && g_fromPreInGameResult.load() == 0) {
         ApplyServerUnitPosition(bytes, nBufferSize);
         unsigned int sx = 0;
@@ -1421,6 +1460,16 @@ bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *outPlayer) {
     return outPlayer && outPlayer->valid;
 }
 
+bool T4CLoginSessionConsumePlayerTeleport(T4CPlayerTeleport *outTeleport) {
+    if (!g_playerTeleportPending.exchange(false)) {
+        return false;
+    }
+    if (outTeleport) {
+        *outTeleport = g_pendingTeleport;
+    }
+    return true;
+}
+
 void T4CLoginSessionUpdateActivePlayerPosition(const unsigned int x, const unsigned int y) {
     std::lock_guard<std::mutex> lock(g_activePlayerMutex);
     if (g_activePlayer.valid) {
@@ -1460,6 +1509,8 @@ void T4CLoginSessionResetAfterReturnToLogin() {
     g_fromPreInGameResult.store(-1);
     g_enterWorldSpawn = {};
     g_playerPopupPending.store(false);
+    g_playerTeleportPending.store(false);
+    g_pendingTeleport = {};
     {
         std::lock_guard<std::mutex> lock(g_activePlayerMutex);
         g_activePlayer = {};
@@ -1540,6 +1591,10 @@ bool T4CLoginSessionConsumeEnterWorldReady(T4CEnterWorldSpawn *) {
 void T4CLoginSessionGetActivePlayer(T4CActivePlayer *) {}
 
 bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *) {
+    return false;
+}
+
+bool T4CLoginSessionConsumePlayerTeleport(T4CPlayerTeleport *) {
     return false;
 }
 

@@ -415,6 +415,17 @@ void GameWorldScreen::Update() {
         return;
     }
     T4CLoginSessionPollBackgroundTasks();
+
+#if defined(LINUX_PORT)
+    T4CPlayerTeleport teleport{};
+    if (T4CLoginSessionConsumePlayerTeleport(&teleport)) {
+        zone_ = teleport.world;
+        mapFlag_ = true;
+        snapPlayerVisual(teleport.x, teleport.y);
+        setPlayerWalkAnim(false);
+    }
+#endif
+
     pollHeldMovement();
 
     if (playerNpcSpawned_ && npcm_ && !npcm_->is_moving(0)) {

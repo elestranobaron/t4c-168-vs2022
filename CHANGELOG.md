@@ -4,6 +4,116 @@ Historique des modifications du client sous `#ifdef LINUX_PORT` et de la documen
 
 ---
 
+## 2026-05-20 — Téléport escaliers / changement de carte (opcode 57, `RQ_TeleportPlayer`)
+
+### Contexte
+
+Après l’entrée en jeu et le déplacement local (commit `63fe2e2`), prendre des **escaliers** ou tout passage serveur qui change de **carte** (même `world` ou autre) envoie l’**opcode 57** (`0x0039`, `RQ_TeleportPlayer`). Sous Windows 1.68, `PacketHandling::TeleportPlayer` (`CLIENT168_RC14h_OK/.../packethandling.cpp`) traite ce paquet ; le client Linux ne faisait **rien** avec — le paquet apparaissait seulement dans les logs :
+
+```text
+[AUTH] <- opcode 57 (0x0039) (non documente client Linux), 12 bytes
+```
+
+**Symptôme utilisateur :** à l’atterrissage dans la nouvelle pièce, personnage **figé**, sol qui **défile** (« tapis roulant »), moves qui partent sans réponse serveur, ou resync incohérente entre `playerX_` / caméra / sprite.
+
+**Trace réseau de référence (repro escaliers, 2026-05-19/20) :**
+
+1. Rafale d’**opcodes 1** (acks move) autour de `(2988, 1074–1076)`.
+2. **Opcode 57** — payload applicatif **12 octets** après en-tête TFC (4) + opcode BE (2) :
+
+   | Offset | Contenu | Exemple |
+   |--------|---------|---------|
+   | 6–7 | `X` (int16 BE) | `0A 49` → 2633 |
+   | 8–9 | `Y` (int16 BE) | `05 B1` → 1457 |
+   | 10–11 | `WORLD` (int16 BE) | `00 00` → monde 0 |
+
+   Exemple complet : `00 00 00 00 00 39 0A 49 05 B1 00 00`.
+
+3. Souvent suivi d’**opcode 16** (objets périphériques) et d’un **opcode 1** à la nouvelle position.
+4. Sans handler 57 : le client ne mettait pas à jour `zone_`, envoyait des moves pendant la transition, et ne reproduisait pas la séquence **60 + 46** du client Windows.
+
+### Comportement Windows de référence (`TeleportPlayer`)
+
+Résumé de ce que fait le client 1.68 (sans tout porter — musique, UI, objets…) :
+
+1. `DoNotMove = TRUE` — bloque les entrées pendant la transition.
+2. Lit `X`, `Y`, `WORLD` depuis le paquet 57.
+3. Met à jour `Player.xPos`, `Player.yPos`, `Player.World`.
+4. Recharge la carte (`LoadZoneMapWorld`, `ForceDisplayZone`).
+5. Envoie **opcode 60** (`RQ_GetNearItems` / « GetNearUnits »).
+6. Envoie **opcode 46** (`RQ_FromPreInGameToInGame`) — le serveur répond ; `DoNotMove = FALSE` dans `FromPreInGameToInGame`.
+
+Le client Linux avait déjà **46 + 60** à l’**entrée initiale** en jeu (après opcode 13 / 18) ; il manquait la **même séquence après un 57**.
+
+### Ce commit implémente (périmètre volontairement minimal)
+
+**Principe :** handler réseau + resync rendu **uniquement**. Aucune modification de `TnC_dev` (`NPCManager`, `npc_draw`, etc.), pas de changement du flux opcode **1** (move ack), pas de file `moveAwaitingAck`, pas de luminosité, pas de `main.cpp`.
+
+#### `src/network/T4CLoginSession.cpp` / `.h`
+
+- **`HandleTeleportPlayer`** — appelé depuis `CommReadCallback` quand `op == RQ_TeleportPlayer` (57) et pipeline in-game (étape ≥ 6, dernier 46 OK).
+- **Parsing** : `X`, `Y`, `WORLD` aux offsets 6/8/10 (int16 big-endian), comme Windows.
+- **État** : remplit `g_pendingTeleport`, met à jour `g_activePlayer.serverX/Y`, pose `g_playerTeleportPending` pour le thread principal.
+- **Annule** un éventuel `g_playerPopupPending` en attente (évite de traiter un vieux ack opcode 1 comme un move normal juste après le téléport).
+- **Envoie** immédiatement :
+  - **60** — `SendGetNearItemsLocked()` (`RQ_GetNearItems`) ;
+  - **46** — `SendFromPreInGameToInGameLocked()` (`RQ_FromPreInGameToInGame`), qui remet `g_fromPreInGameResult` à `-1` jusqu’à la réponse serveur.
+- **`T4CLoginSessionConsumePlayerTeleport`** — le thread UI consomme une fois l’événement téléport (pattern identique à `ConsumePlayerPopupUpdate`).
+- **`T4CLoginSessionResetAfterReturnToLogin`** — reset des flags téléport au retour login (Esc).
+- Stub `#else` (hors `LINUX_PORT`) pour le linker.
+
+**Effet secondaire voulu, sans code supplémentaire :** tant que la réponse **46** n’est pas revenue (`g_fromPreInGameResult != 0`), `T4CLoginSessionSendMove` **refuse** déjà les opcodes 1–8 — même garde qu’à l’entrée en jeu. Cela évite d’envoyer un move sur la touche encore enfoncée pendant la transition (comportement proche de `DoNotMove` Windows).
+
+#### `src/game/GameWorldScreen.cpp`
+
+Dans **`Update()`**, **avant** `pollHeldMovement()` :
+
+1. `T4CLoginSessionConsumePlayerTeleport(&teleport)` ;
+2. si téléport reçu :
+   - `zone_ = teleport.world` ;
+   - `mapFlag_ = true` → prochain `redraw()` appelle `mapi_->get_map(...)` pour la **nouvelle** carte ;
+   - `snapPlayerVisual(x, y)` → `playerX_`/`playerY_`, `npcm_->set_world_pos` (annule un éventuel glide `move_to`), `syncCameraToPlayer()` ;
+   - `setPlayerWalkAnim(false)` → action idle `'S'`.
+
+**Non modifié dans ce commit :** handler opcode 1 / popup, `tryMovePlayer`, `kMoveVisualStepsMul`, facing, luminosité F4/F5.
+
+### Fichiers modifiés
+
+| Fichier | Lignes / rôle |
+|---------|----------------|
+| `src/network/T4CLoginSession.h` | struct `T4CPlayerTeleport`, déclaration `ConsumePlayerTeleport` |
+| `src/network/T4CLoginSession.cpp` | `HandleTeleportPlayer`, branche 57, consume, reset |
+| `src/game/GameWorldScreen.cpp` | bloc `#if LINUX_PORT` dans `Update()` (6 lignes effectives) |
+
+### Logs attendus après fix
+
+```text
+[PHASE] RQ_TeleportPlayer (57) : @ 2633,1457 monde 0.
+[UDP] -> RQ_GetNearItems (60).
+[PHASE] Envoi RQ_FromPreInGameToInGame (46) ...
+[PHASE] Reponse RQ_FromPreInGameToInGame (46) code=0.
+```
+
+Puis déplacement normal une fois le 46 OK.
+
+### Non inclus (volontairement)
+
+| Élément Windows | Raison |
+|-----------------|--------|
+| `g_GameMusic.Reset()` / `LoadNewSound()` | Pas de couche audio SDL3 monde |
+| `Objects.DeleteAll()` / PNJ réseau | Opcode **69** / **60** pas rendus à l’écran |
+| Fade écran (`World.SetFading`) | Non porté |
+| Handler **opcode 16** (objets sol) | Hors périmètre |
+| Modifications **TnC** | Règle projet : pas toucher `TnC_dev` pour le gameplay réseau |
+
+### Limites restantes après ce commit
+
+- **Vitesse marche / animation jambes** — inchangé (`63fe2e2`).
+- **Opcode 1** — snap serveur sur chaque ack move peut toujours couper le glide ; pas retouché ici.
+- **Validation escaliers** — à confirmer en jeu réel ; si blocage persiste, investiguer réponse **46** post-57 côté serveur avant d’ajouter autre chose.
+
+---
+
 ## 2026-05-18 — Pipeline auth → sélection perso → entrée en jeu (opcodes 14/99/26/13/46/60)
 
 ### Contexte
@@ -185,6 +295,16 @@ Suite à l’entrée en jeu validée (13 → 18 → 46/60), travail sur **Phase 
 
 ---
 
+### Bugs corrigés (2026-05-20)
+
+#### ~~Escaliers / changement de carte — perso figé + « tapis roulant »~~ → opcode **57** géré
+
+Voir section **2026-05-20** ci-dessus. Avant ce commit : pas de handler 57, pas de reload `zone_`, pas d’envoi **60+46** post-téléport.
+
+---
+
+### Bugs / limites encore ouverts
+
 ### Limites connues (à traiter)
 
 | Sujet | Détail |
@@ -210,6 +330,7 @@ Suite à l’entrée en jeu validée (13 → 18 → 46/60), travail sur **Phase 
 #### Client — réseau (`T4CLoginSession`)
 
 - [ ] Handlers structurés pour les opcodes monde (réf. `packethandling.cpp`), au minimum :
+  - ~~**57** — téléport / escaliers~~ — **fait** (2026-05-20)
   - **9** — `GetPlayerPos` / synchro position
   - **43** — stats / HUD joueur
   - **60** — unités proches (compléter au-delà du log)

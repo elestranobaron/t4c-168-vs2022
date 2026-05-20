@@ -94,6 +94,15 @@ void T4CLoginSessionGetActivePlayer(T4CActivePlayer *outPlayer);
 /** True une fois par nouveau PacketPopup 10004 (position / apparence serveur). */
 bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *outPlayer);
 
+/** Position apres RQ_TeleportPlayer (57). */
+struct T4CPlayerTeleport {
+    unsigned int x{0};
+    unsigned int y{0};
+    unsigned short world{0};
+};
+
+bool T4CLoginSessionConsumePlayerTeleport(T4CPlayerTeleport *outTeleport);
+
 /** Envoie un déplacement (opcodes 1–8, aligné TFCSocket.cpp). Retourne false si pas en jeu. */
 bool T4CLoginSessionSendMove(std::uint16_t moveOpcode);
 
