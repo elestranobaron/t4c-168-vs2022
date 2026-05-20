@@ -3988,6 +3988,7 @@ void RunCommandThread(LPVOID pParam)
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include "gui/CharacterCreateScreen.h"
 #include "gui/CharacterSelectScreen.h"
 #include "gui/LauncherChrome.h"
 #include "gui/LoginScreen.h"
@@ -3999,7 +4000,7 @@ void RunCommandThread(LPVOID pParam)
 
 namespace {
 
-enum class AppPhase { Login, CharacterSelect, World };
+enum class AppPhase { Login, CharacterSelect, CharacterCreate, World };
 
 }  // namespace
 
@@ -4038,6 +4039,7 @@ int main(int argc, char *argv[])
 
     LoginScreen login(renderer, &launcherChrome);
     CharacterSelectScreen characterSelect(renderer, &launcherChrome);
+    CharacterCreateScreen characterCreate(renderer, &launcherChrome);
     SDL_StartTextInput(window);
 
     AppPhase phase = AppPhase::Login;
@@ -4065,6 +4067,13 @@ int main(int argc, char *argv[])
                     SDL_SetWindowTitle(window, "T4C (Linux SDL3)");
                     SDL_StartTextInput(window);
                     SDL_Log("[main] Retour ecran login (depuis selection perso).");
+                }
+            } else if (phase == AppPhase::CharacterCreate) {
+                if (!characterCreate.HandleEvent(event, window)) {
+                    phase = AppPhase::CharacterSelect;
+                    SDL_SetWindowTitle(window, "T4C — personnages");
+                    SDL_StopTextInput(window);
+                    SDL_Log("[main] Retour selection perso (depuis creation).");
                 }
             }
 #if T4C_HAS_WORLD_VIEW
@@ -4101,6 +4110,7 @@ int main(int argc, char *argv[])
             login.Update();
 
             if (T4CLoginSessionConsumeCharacterListReady()) {
+                characterSelect.resetFlow();
                 phase = AppPhase::CharacterSelect;
                 SDL_StopTextInput(window);
                 SDL_SetWindowTitle(window, "T4C — personnages");
@@ -4114,6 +4124,14 @@ int main(int argc, char *argv[])
             SDL_Delay(16);
         } else if (phase == AppPhase::CharacterSelect) {
             characterSelect.Update();
+
+            if (characterSelect.ConsumeWantCreateCharacter()) {
+                characterCreate.resetFlow();
+                phase = AppPhase::CharacterCreate;
+                SDL_SetWindowTitle(window, "T4C — creation perso");
+                SDL_StartTextInput(window);
+                SDL_Log("[main] Passage ecran creation personnage.");
+            }
 
             T4CEnterWorldSpawn spawn;
             if (T4CLoginSessionConsumeEnterWorldReady(&spawn)) {
@@ -4155,6 +4173,52 @@ int main(int argc, char *argv[])
                 SDL_RenderPresent(renderer);
                 SDL_Delay(16);
             }
+        } else if (phase == AppPhase::CharacterCreate) {
+            characterCreate.Update();
+
+            T4CEnterWorldSpawn spawn{};
+            if (T4CLoginSessionConsumeEnterWorldReady(&spawn)) {
+#if T4C_HAS_WORLD_VIEW
+                SDL_StopTextInput(window);
+                SDL_SetWindowTitle(window, "T4C — monde (SDL3)");
+                SDL_SetWindowSize(window, 1600, 900);
+                SDL_SetRenderLogicalPresentation(renderer,
+                                                 GameWorldScreen::kLogicalWidth,
+                                                 GameWorldScreen::kLogicalHeight,
+                                                 SDL_LOGICAL_PRESENTATION_LETTERBOX);
+                SDL_SetRenderClipRect(renderer, nullptr);
+                SDL_SetRenderColorScale(renderer, 1.f);
+                if (world.Init(renderer, window, spawn.x, spawn.y, spawn.world)) {
+                    phase = AppPhase::World;
+                    SDL_Log("[main] Nouveau perso — entree en jeu @ %u,%u Z%u.", spawn.x, spawn.y,
+                            static_cast<unsigned>(spawn.world));
+                } else {
+                    SDL_ShowSimpleMessageBox(
+                        SDL_MESSAGEBOX_WARNING, "T4C — monde",
+                        (world.GetLastError() +
+                         "\n\nOpcode 13 OK ; definissez T4C_DATA ou convertissez les Game Files.")
+                            .c_str(),
+                        window);
+                    phase = AppPhase::CharacterSelect;
+                    SDL_StartTextInput(window);
+                }
+#else
+                SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "T4C — reseau",
+                                         "Entree en jeu OK (opcode 13). Vue monde non compilee.",
+                                         window);
+#endif
+            } else if (T4CLoginSessionConsumeCreatePlayerSuccess()) {
+                phase = AppPhase::CharacterSelect;
+                SDL_SetWindowTitle(window, "T4C — personnages");
+                SDL_StopTextInput(window);
+                SDL_Log("[main] Personnage cree — retour selection.");
+            }
+
+            SDL_SetRenderDrawColor(renderer, 18, 20, 26, 255);
+            SDL_RenderClear(renderer);
+            characterCreate.Render(renderer);
+            SDL_RenderPresent(renderer);
+            SDL_Delay(16);
         }
 #if T4C_HAS_WORLD_VIEW
         else {

@@ -4,6 +4,172 @@ Historique des modifications du client sous `#ifdef LINUX_PORT` et de la documen
 
 ---
 
+## 2026-05-20 — Création personnage (25/31/26/13), introduction Haruspice, sélection persos enrichie
+
+### Contexte — ce qu’on a enduré
+
+Après validation du rendu monde (SDL3 natif, couleurs, téléport opcode **57**), la **Phase 1 réseau** restait incomplète côté **launcher** : pas de création perso, pas d’intro Windows, liste persos minimale (Entrée / Esc seulement).
+
+| Symptôme | Cause identifiée |
+|----------|------------------|
+| **Après questionnaire → retour liste sans stats** | `ParseRolledStatsPayload` exigeait **31 octets** au lieu de **19** (`Character::packet_stats` = 7 stats + 2×long HP + 2×short mana). Réponse opcode **25** rejetée côté client alors que le serveur avait répondu. |
+| **« Creation en cours (attente opcode 25)… » bloqué 60 s** | Parfois le serveur ne répond pas (picklock, `WaitForSaving`, compte `in_game`) ; plus souvent **perso provisoire stale** côté serveur (`boRerolling`) après timeout ou abandon — le client renvoyait un **25** sans nettoyer l’état précédent. |
+| **Suppression perso → code erreur 3** | **Serveur** : `PlayerName VARCHAR(20)` trop court pour le rename interne lors du delete (`UPDATE` SQL échoue). Correctif SQL documenté côté serveur, pas dans ce dépôt. |
+| **Menu connexion intermédiaire confus** | `ConnectionMenuScreen` ajouté puis **retiré** : l’utilisateur voulait Login → liste persos directement, intro accessible via raccourci. |
+| **Intro absente** | Windows : écran `TFC_INTRODUCTION` (récit Haruspice) avant / pendant le launcher ; client Linux ne l’avait pas. |
+
+**Objectif validé (flux Windows 1.68)** : Login → liste persos → **C** création → nom → sexe → questionnaire (4 questions) → **opcode 25** → écran **reroll stats** → **R** (31) / **Entrée** (26+13) → **monde** ; **Esc** annule (15).
+
+---
+
+### Note méthode — précision / parité Windows
+
+| Sujet | Niveau de fidélité | Détail |
+|-------|-------------------|--------|
+| **Questionnaire** | **Élevé** | Banque 8 questions, shuffle `QN`/`RN`, 4 tirages — calqué sur `TFCSocket.cpp` (`Shuffle`, `QuestionAnswer`, indices `RN[QuestionNumber][QuestionChoice-1]`). |
+| **Ordre octets opcode 25** | **Élevé** | `fillPacketStats` envoie `[answers[3], answers[2], answers[0], answers[1], answers[4], sex]` comme Windows (`Send << QuestionAnswer[3]…`). |
+| **Reroll stats payload** | **Élevé** (après fix) | `kRolledStatsPayloadLen = 19`, offset stats à **7** après octet erreur (25) ou **6** (31). |
+| **Validation création** | **Élevé** | `ConfirmCreateReroll` → refresh **26** puis **13** auto (`g_autoEnterWorldAfterCreate`) — aligné branche Windows `CreateFlag` / entrée directe en jeu. |
+| **Introduction Haruspice** | **Moyen — texte statique** | Prose française **hardcodée** dans `IntroductionScreen.cpp`, annotée « aligné `French.elng` 45–47, 92–93 ». **Pas** de chargement runtime du fichier `.elng` (workaround : évite parser elng / dépendance asset non portée). |
+| **Opcode 90 QueryNameExistence** | **Non câblé** | `BuildQueryNameExistencePacket` + déclaration API ajoutés ; Windows ne l’utilise pas non plus dans `TFCSocket.cpp` création — **non branché** sur validation nom. |
+| **Delete opcode 15** | **Élevé** | Parsing multi-formats réponse (code 0, echo nom, code erreur) ; refresh **26** après delete. |
+
+**Workarounds client (état stale / robustesse)** :
+
+1. **`T4CLoginSessionPrepareForCreateScreen()`** — appelé à chaque `CharacterCreateScreen::resetFlow()` : reset flags client + **opcode 15** si reroll/nom provisoire encore connu.
+2. **Timeout 60 s opcode 25** — déclenche aussi **15** sur le nom provisoire (`g_pendingCreatePlayerName`) pour débloquer le serveur.
+3. **`Update()` création** — en étape `Reroll`, ne plus écraser l’UI avec « attente opcode 25 ».
+4. **Logs** — refus envoi 25 logué avec flags `reroll/wait25/wait31/wait13/wait15`.
+
+**Dépendance serveur (hors commit client)** : si delete échoue encore en code **3**, appliquer migration `PlayerName VARCHAR(64)` sur MariaDB (`bootstrap_auth_mariadb.sql` / `fix_playingcharacters_playername_length_mariadb.sql` côté `T4C_Server_Linux_Final_Step`).
+
+---
+
+### Ce qui a été fait
+
+#### A. Écran introduction — `IntroductionScreen`
+
+- Nouveau module plein écran 800×600 : texte Haruspice, **scroll auto** (~28 px/s) + molette / flèches.
+- **I** ou **H** depuis l’écran **sélection persos** (`CharacterSelectScreen`).
+- **Esc** / fin scroll → fermeture overlay ; le chrome launcher (fond BMP, bandeau) reste visible en dessous.
+- Rendu via `T4CUiFont` / `LauncherChrome` (même stack que login).
+
+#### B. Sélection persos — `CharacterSelectScreen`
+
+- **Footer actions** (une ligne par raccourci, bas d’écran) :
+  - `[Entrée]` jouer — `[C]` créer (`x/max` depuis opcode **103**)
+  - `[D]` / Suppr → confirmation → **opcode 15** + attente **26**
+  - `[I]` introduction — `[Esc]` retour login
+- **`resetFlow()`** : réinitialise sélection, intro, erreurs réseau delete/13.
+- **`IntroductionScreen`** embarqué (overlay, pas phase `main` séparée).
+- Suppression du message permanent « creation non implementee » sur liste vide.
+
+#### C. Création personnage — `CharacterCreateScreen` + `T4CCharacterQuestionnaire`
+
+**Étapes UI** : `Name` → `Sex` (Tab) → `Questionnaire` (4× choix 1–5, flèches) → **`Reroll`** (stats).
+
+| Touche | Action |
+|--------|--------|
+| **Entrée** | Avancer / envoyer **25** après Q4 / valider reroll |
+| **Esc** | Retour étape précédente ; depuis **Reroll** → **15** + retour sélection |
+| **R** (reroll) | **Opcode 31** — relance dés |
+| **Tab** (sexe) | Homme / Femme |
+
+**Réseau création** (`T4CLoginSession`) :
+
+| Opcode | Rôle |
+|--------|------|
+| **25** `RQ_CreatePlayer` | Questionnaire + sexe + nom → stats reroll |
+| **31** `RQ_Reroll` | Nouveau jet de dés |
+| **15** `RQ_DeletePlayer` | Annulation perso provisoire (Esc reroll / cleanup stale) |
+| **26** `RQ_GetPersonnalPClist` | Refresh liste après validation reroll |
+| **13** `RQ_PutPlayerInGame` | Entrée auto en monde après **26** si validation reroll |
+
+- **`HandleCreatePlayerReply`** : erreur octet 6 ≠ 0 → message utilisateur ; OK → `g_inCreateRerollPhase`, stats via `StoreRolledStatsFromPacket`.
+- **`HandleRerollReply`** : mise à jour stats sans quitter phase reroll.
+- **`ConfirmCreateReroll`** : `g_autoEnterWorldAfterCreate` + `TryAutoEnterWorldAfterCreateList()` sur réception **26**.
+- **`CancelCreateReroll`** : **15** + clear état client.
+- **`PrepareForCreateScreen`** : cleanup à l’ouverture écran création (voir workarounds).
+- Timeouts poll : 25 (60 s), 31 (30 s), 15/26 (30 s) avec messages UI.
+
+#### D. Flux application — `main.cpp`
+
+- Nouvelle phase **`AppPhase::CharacterCreate`** entre sélection et monde.
+- **C** sur sélection → `characterCreate.resetFlow()` → phase création (text input SDL activé).
+- **Entrée reroll OK** → `ConsumeEnterWorldReady` → `GameWorldScreen::Init` (même chemin qu’entrée depuis liste).
+- Esc création (nom) / Esc reroll (annulé) → retour sélection.
+- **`ConsumeCreatePlayerSuccess`** conservé pour retour liste si entrée auto 13 échoue.
+
+#### E. Suppression perso — `T4CLoginSession`
+
+- **`RequestDeletePlayer`** : **15** puis **26** ; `g_waitingDeletePlayer` + timeout.
+- **`HandleDeletePlayerReply`** : gère code 0, echo nom (format Windows), codes erreur.
+- **`DeleteReplyLooksLikeDeletedName`** : heuristique pour réponses « nom supprimé » non standard.
+
+#### F. Crédits — `CREDITS.md` (nouveau)
+
+- Attribution Tom / ElEsTaNoBaRoN, session rendu 2026-05, Noth GPL, statut VSF, renommage moteur recommandé, note licence GPL vs Apache.
+
+---
+
+### Retiré / non retenu
+
+| Élément | Raison |
+|---------|--------|
+| **`ConnectionMenuScreen`** | Écran intermédiaire post-login supprimé — flux direct Login → liste persos. |
+| **Intro sur écran login** | Intro uniquement sur sélection (**I**/**H**) — évite double point d’entrée. |
+| **Succès création → liste sans entrer en jeu** | Remplacé par entrée **monde directe** après validation reroll (parité Windows). |
+| **Chargement `.elng` pour intro** | Texte intégré — parser elng non porté. |
+
+---
+
+### Fichiers modifiés / ajoutés — dépôt `client/`
+
+| Fichier | Rôle |
+|---------|------|
+| `CMakeLists.txt` | `IntroductionScreen`, `CharacterCreateScreen`, `T4CCharacterQuestionnaire` |
+| `CREDITS.md` | **Nouveau** — crédits port Linux |
+| `src/gui/IntroductionScreen.cpp/.h` | **Nouveau** — récit Haruspice scrollable |
+| `src/gui/CharacterCreateScreen.cpp/.h` | **Nouveau** — flux nom/sexe/questionnaire/reroll |
+| `src/gui/T4CCharacterQuestionnaire.cpp/.h` | **Nouveau** — logique questionnaire Windows |
+| `src/gui/CharacterSelectScreen.cpp/.h` | Footer, C/D/I, delete confirm, intro overlay, `resetFlow` |
+| `src/network/T4CLoginSession.cpp/.h` | 25/31/15/26/13 création, reroll, delete, auto-enter, cleanup stale |
+| `src/main.cpp` | Phase `CharacterCreate`, boucle rendu création |
+
+---
+
+### Logs attendus (création nominale)
+
+```text
+[PHASE] Envoi RQ_CreatePlayer (25) pour « MonPerso » sex=0 (… octets TFC).
+[PHASE] RQ_CreatePlayer (25) OK — ecran reroll (opcode 31 / Entree / Esc).
+[PHASE] Stats : FOR … END … AGI … SAG … INT … PV …/…
+[PHASE] Creation validee — refresh 26 puis entree en monde (aligne Windows).
+[PHASE] Creation confirmee — RQ_PutPlayerInGame (13) pour « MonPerso ».
+[main] Nouveau perso — entree en jeu @ x,y Z…
+```
+
+---
+
+### Limites restantes
+
+| Sujet | Statut |
+|-------|--------|
+| **Opcode 90** validation nom | API + builder paquet ; pas d’UI ni handler réponse |
+| **Timeout 25 sans réponse serveur** | Workaround cleanup **15** ; cause racine serveur (picklock / async) à investiguer si persiste |
+| **Delete code 3** | Migration SQL **serveur** requise si colonne `PlayerName` trop courte |
+| **Sprites création Windows** | Pas de fond `J_Back` / boutons `.dec` — UI texte SDL3 minimaliste |
+| **Musique « Sadness Music »** | Toujours absente (Phase audio) |
+| **Entrée intro depuis login** | Non — volontaire |
+
+---
+
+### Mise à jour entrée 2026-05-19
+
+L’item « Écran création personnage + opcode 25 — **Non commencé** » (section *Non inclus*) est **obsolète** — voir cette entrée.
+
+---
+
 ## 2026-05-19 — Vue monde SDL3 native, launcher graphique, HUD joueur, menu pause — fin du rendu sombre
 
 ### Contexte — ce qui a été enduré
@@ -192,7 +358,7 @@ third_party/tnc_sdl3/render/Sdl3FramePresenter.h
 | Élément | Statut |
 |---------|--------|
 | SideMenu panels complets (minimap TMI, chat, inventaire…) | Placeholder — sprites OK, logique panels non |
-| Écran création personnage + opcode 25 | Non commencé |
+| Écran création personnage + opcode 25 | **Fait** — voir entrée **2026-05-20** (création / reroll) |
 | Musique Phase 1 (`LoadNewSound`) | Non commencé |
 | Opcode 43 (level serveur autoritatif) | Level affiché = slot opcode 26 uniquement |
 | Couche `env` / torche.png (jour-nuit test mestoph) | Absente du client (overlay luminosité test_mapinterface) |

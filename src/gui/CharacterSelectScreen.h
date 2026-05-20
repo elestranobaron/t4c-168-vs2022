@@ -2,6 +2,9 @@
 
 #include <SDL3/SDL.h>
 
+#include "gui/IntroductionScreen.h"
+
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -24,16 +27,28 @@ class CharacterSelectScreen {
     /** false = retour login (Esc). */
     bool ShouldStay() const { return stay_; }
 
+    /** true une fois : ouvrir ecran creation (touche C). */
+    bool ConsumeWantCreateCharacter() { return wantCreate_.exchange(false); }
+
+    void resetFlow();
+
     const std::string &GetStatusLine() const { return statusLine_; }
 
    private:
     void refreshFromSession();
     void tryEnterWorld(SDL_Window *window);
+    void tryDeleteSelected(SDL_Window *window);
     void drawUiText(SDL_Renderer *renderer, const char *text, float x, float y, SDL_Color color) const;
+    void renderActionFooter(SDL_Renderer *renderer, SDL_Color textMuted) const;
 
     SDL_Renderer *renderer_{nullptr};
     LauncherChrome *chrome_{nullptr};
+    IntroductionScreen introduction_;
+    Uint64 lastTickMs_{0};
     bool stay_{true};
+    std::atomic<bool> wantCreate_{false};
+    bool confirmDelete_{false};
+    std::string pendingDeleteName_;
     int selectedIndex_{0};
     std::vector<std::string> displayLines_;
     std::string statusLine_;

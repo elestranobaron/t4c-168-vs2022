@@ -17,6 +17,22 @@ struct T4CEnterWorldSpawn {
     bool valid{false};
 };
 
+/** Stats affichees apres opcode 25/31 (Character::packet_stats, aligne TFCSocket.cpp). */
+struct T4CCharacterRolledStats {
+    unsigned char agi{0};
+    unsigned char end{0};
+    unsigned char intel{0};
+    unsigned char luck{0};
+    unsigned char str{0};
+    unsigned char wil{0};
+    unsigned char wis{0};
+    unsigned int maxHp{0};
+    unsigned int hp{0};
+    unsigned short maxMana{0};
+    unsigned short mana{0};
+    bool valid{false};
+};
+
 /** Perso actif (selection + sync serveur PacketPopup type 10004). */
 struct T4CActivePlayer {
     std::string name;
@@ -45,7 +61,7 @@ bool T4CLoginSessionStart(const std::string &hostField, const std::string &portF
 
 void T4CLoginSessionShutdown();
 
-/** Déconnexion serveur non bloquante (SafePlug ~15 s en arrière-plan) ; l’UI peut se fermer tout de suite. */
+/** Déconnexion serveur : SafePlug+ExitGame immédiat, fermeture UDP en arrière-plan. */
 void T4CLoginSessionDisconnectInGame();
 
 /** True si une session UDP est active ou un logout SafePlug est encore en cours. */
@@ -74,6 +90,53 @@ bool T4CLoginSessionConsumeCharacterListReady();
 
 /** Copie la liste persos parsee (thread-safe). */
 void T4CLoginSessionCopyCharacterList(std::vector<T4CCharacterSlot> *outSlots, int *outMaxPerAccount);
+
+/** Envoie RQ_CreatePlayer (25). stats[5] = reponses questionnaire (V1: defauts fixes). sex: 0=homme, 1=femme. */
+bool T4CLoginSessionRequestCreatePlayer(const std::string &name, unsigned char sex,
+                                        const unsigned char stats[5]);
+
+bool T4CLoginSessionIsWaitingCreatePlayer();
+
+bool T4CLoginSessionHasCreatePlayerError();
+
+std::string T4CLoginSessionGetCreatePlayerErrorMessage();
+
+void T4CLoginSessionClearCreatePlayerError();
+
+/** Reinitialise l'etat client creation/reroll (ecran creation ouvert). */
+void T4CLoginSessionPrepareForCreateScreen();
+
+/** Envoie RQ_QueryNameExistence (90) — validation nom cote serveur (aligne Windows). */
+bool T4CLoginSessionRequestQueryNameExistence(const std::string &name);
+
+/** True une fois quand le joueur a valide l'ecran reroll (liste 26 demandee). */
+bool T4CLoginSessionConsumeCreatePlayerSuccess();
+
+/** True pendant l'ecran reroll apres opcode 25 OK (perso cree, stats modifiables). */
+bool T4CLoginSessionIsInCreateRerollPhase();
+
+/** True une fois quand de nouvelles stats arrivent (opcode 25 ou 31). */
+bool T4CLoginSessionConsumeRolledStatsUpdate(T4CCharacterRolledStats *outStats);
+
+/** Envoie RQ_Reroll (31) — relance les des cote serveur. */
+bool T4CLoginSessionRequestCreateReroll();
+
+/** Valide les stats courantes : refresh liste 26 puis entree en monde (aligne Windows). */
+bool T4CLoginSessionConfirmCreateReroll();
+
+/** Annule la creation : opcode 15 sur le perso provisoire, retour selection. */
+bool T4CLoginSessionCancelCreateReroll();
+
+/** Envoie RQ_DeletePlayer (15) puis refresh RQ_GetPersonnalPClist (26). */
+bool T4CLoginSessionRequestDeletePlayer(const std::string &playerName);
+
+bool T4CLoginSessionIsWaitingDeletePlayer();
+
+bool T4CLoginSessionHasDeletePlayerError();
+
+std::string T4CLoginSessionGetDeletePlayerErrorMessage();
+
+void T4CLoginSessionClearDeletePlayerError();
 
 /** Envoie RQ_PutPlayerInGame (13) avec le nom choisi (une seule requete en vol). */
 bool T4CLoginSessionRequestPutPlayerInGame(const std::string &playerName);

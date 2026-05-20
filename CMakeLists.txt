@@ -66,7 +66,10 @@ include(${CMAKE_SOURCE_DIR}/cmake/TncGraphical.cmake)
 set(SOURCES
     src/main.cpp
     src/gui/LoginScreen.cpp
+    src/gui/IntroductionScreen.cpp
     src/gui/CharacterSelectScreen.cpp
+    src/gui/CharacterCreateScreen.cpp
+    src/gui/T4CCharacterQuestionnaire.cpp
     src/gui/LoginClientConfig.cpp
     src/gui/T4CUiFont.cpp
     src/gui/T4CScrollingBanner.cpp

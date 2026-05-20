@@ -15,8 +15,10 @@
 namespace {
 
 constexpr float kPaddingX = 48.0f;
-constexpr float kListY = 140.0f;
+constexpr float kListY = 120.0f;
 constexpr float kRowH = 28.0f;
+constexpr float kFooterRowH = 26.0f;
+constexpr float kFooterBottomPad = 48.0f;
 
 bool KeyDown(const SDL_Event &event, SDL_Scancode sc) {
     return event.type == SDL_EVENT_KEY_DOWN && event.key.down && !event.key.repeat &&
@@ -27,7 +29,23 @@ bool KeyDown(const SDL_Event &event, SDL_Scancode sc) {
 
 CharacterSelectScreen::CharacterSelectScreen(SDL_Renderer *renderer, LauncherChrome *chrome)
     : renderer_(renderer), chrome_(chrome) {
+    resetFlow();
+}
+
+void CharacterSelectScreen::resetFlow() {
+    stay_ = true;
+    wantCreate_.store(false);
+    confirmDelete_ = false;
+    pendingDeleteName_.clear();
+    selectedIndex_ = 0;
+    statusLocked_ = false;
     statusLine_ = "Chargement liste…";
+    lastTickMs_ = 0;
+    introduction_.close();
+#if defined(LINUX_PORT)
+    T4CLoginSessionClearPutPlayerInGameError();
+    T4CLoginSessionClearDeletePlayerError();
+#endif
 }
 
 void CharacterSelectScreen::drawUiText(SDL_Renderer *renderer, const char *text, const float x,
@@ -50,11 +68,6 @@ void CharacterSelectScreen::refreshFromSession() {
     if (slots.empty()) {
         displayLines_.push_back("(aucun personnage sur ce compte)");
         selectedIndex_ = 0;
-        if (!statusLocked_) {
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "Max %d persos/compte — creation non implementee", maxPerAccount);
-            statusLine_ = buf;
-        }
         return;
     }
 
@@ -67,13 +80,22 @@ void CharacterSelectScreen::refreshFromSession() {
     }
     selectedIndex_ = std::clamp(selectedIndex_, 0, static_cast<int>(slots.size()) - 1);
 
-    if (!statusLocked_) {
-        statusLine_ = "Entree : entrer en jeu — Fleches : choisir — Esc : retour login";
-    }
-
     if (T4CLoginSessionHasPutPlayerInGameError()) {
         statusLocked_ = true;
+        confirmDelete_ = false;
         statusLine_ = T4CLoginSessionGetPutPlayerInGameErrorMessage();
+    }
+    if (T4CLoginSessionHasDeletePlayerError()) {
+        statusLocked_ = true;
+        confirmDelete_ = false;
+        statusLine_ = T4CLoginSessionGetDeletePlayerErrorMessage();
+    }
+    if (T4CLoginSessionIsWaitingDeletePlayer()) {
+        statusLocked_ = true;
+        statusLine_ = "Suppression en cours (attente opcode 15/26)…";
+    } else if (!T4CLoginSessionHasDeletePlayerError() && !confirmDelete_ &&
+               statusLine_.find("Suppression en cours") == 0) {
+        statusLocked_ = false;
     }
 #endif
 }
@@ -106,11 +128,56 @@ void CharacterSelectScreen::tryEnterWorld(SDL_Window * /*window*/) {
 #endif
 }
 
+void CharacterSelectScreen::tryDeleteSelected(SDL_Window * /*window*/) {
+#if defined(LINUX_PORT)
+    if (T4CLoginSessionIsWaitingDeletePlayer() || T4CLoginSessionIsWaitingPutPlayerInGame()) {
+        return;
+    }
+    std::vector<T4CCharacterSlot> slots;
+    T4CLoginSessionCopyCharacterList(&slots, nullptr);
+    if (selectedIndex_ < 0 || selectedIndex_ >= static_cast<int>(slots.size())) {
+        statusLocked_ = true;
+        confirmDelete_ = false;
+        statusLine_ = "Selection invalide.";
+        return;
+    }
+    const std::string &name = slots[static_cast<std::size_t>(selectedIndex_)].name;
+    T4CLoginSessionClearDeletePlayerError();
+    statusLocked_ = false;
+    if (!T4CLoginSessionRequestDeletePlayer(name)) {
+        statusLocked_ = true;
+        confirmDelete_ = false;
+        statusLine_ = "Envoi RQ_DeletePlayer (15) impossible.";
+        return;
+    }
+    confirmDelete_ = false;
+    statusLocked_ = true;
+    statusLine_ = "Suppression en cours (attente opcode 15/26)…";
+    if (selectedIndex_ >= static_cast<int>(slots.size()) - 1) {
+        selectedIndex_ = std::max(0, selectedIndex_ - 1);
+    }
+    SDL_Log("[CharacterSelect] RQ_DeletePlayer envoye pour %s", name.c_str());
+#endif
+}
+
 bool CharacterSelectScreen::HandleEvent(const SDL_Event &event, SDL_Window *window) {
+    if (introduction_.isOpen()) {
+        if (!introduction_.HandleEvent(event)) {
+            introduction_.close();
+        }
+        return true;
+    }
+
     switch (event.type) {
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP:
             if (KeyDown(event, SDL_SCANCODE_ESCAPE)) {
+                if (confirmDelete_) {
+                    confirmDelete_ = false;
+                    pendingDeleteName_.clear();
+                    statusLocked_ = false;
+                    return true;
+                }
                 SDL_Log("[CharacterSelect] Esc — retour login");
                 stay_ = false;
                 statusLocked_ = false;
@@ -130,7 +197,53 @@ bool CharacterSelectScreen::HandleEvent(const SDL_Event &event, SDL_Window *wind
                 return true;
             }
             if (KeyDown(event, SDL_SCANCODE_RETURN) || KeyDown(event, SDL_SCANCODE_KP_ENTER)) {
+                if (confirmDelete_) {
+                    tryDeleteSelected(window);
+                    return true;
+                }
                 tryEnterWorld(window);
+                return true;
+            }
+            if (KeyDown(event, SDL_SCANCODE_D) || KeyDown(event, SDL_SCANCODE_DELETE)) {
+#if defined(LINUX_PORT)
+                if (confirmDelete_) {
+                    return true;
+                }
+                std::vector<T4CCharacterSlot> slots;
+                T4CLoginSessionCopyCharacterList(&slots, nullptr);
+                if (slots.empty() || selectedIndex_ < 0 || selectedIndex_ >= static_cast<int>(slots.size())) {
+                    statusLocked_ = true;
+                    statusLine_ = "Aucun personnage a supprimer.";
+                    return true;
+                }
+                pendingDeleteName_ = slots[static_cast<std::size_t>(selectedIndex_)].name;
+                confirmDelete_ = true;
+                statusLocked_ = false;
+                statusLine_.clear();
+#endif
+                return true;
+            }
+            if (KeyDown(event, SDL_SCANCODE_C)) {
+                if (confirmDelete_) {
+                    return true;
+                }
+#if defined(LINUX_PORT)
+                std::vector<T4CCharacterSlot> slots;
+                int maxPerAccount = 0;
+                T4CLoginSessionCopyCharacterList(&slots, &maxPerAccount);
+                if (maxPerAccount > 0 && static_cast<int>(slots.size()) >= maxPerAccount) {
+                    statusLocked_ = true;
+                    statusLine_ = "Nombre maximum de personnages atteint.";
+                    return true;
+                }
+#endif
+                wantCreate_.store(true);
+                return true;
+            }
+            if (KeyDown(event, SDL_SCANCODE_I) || KeyDown(event, SDL_SCANCODE_H)) {
+                if (!confirmDelete_) {
+                    introduction_.open();
+                }
                 return true;
             }
             return true;
@@ -143,13 +256,66 @@ void CharacterSelectScreen::Update() {
 #if defined(LINUX_PORT)
     T4CLoginSessionPollBackgroundTasks();
 #endif
+    const Uint64 now = SDL_GetTicks();
+    if (lastTickMs_ == 0) {
+        lastTickMs_ = now;
+    }
+    const float delta = static_cast<float>(now - lastTickMs_) * 0.001f;
+    lastTickMs_ = now;
+    introduction_.Update(delta);
+
     if (chrome_) {
         chrome_->update();
     }
     refreshFromSession();
 }
 
+void CharacterSelectScreen::renderActionFooter(SDL_Renderer *renderer, const SDL_Color textMuted) const {
+    std::vector<std::string> lines;
+#if defined(LINUX_PORT)
+    if (confirmDelete_) {
+        lines.push_back("Supprimer « " + pendingDeleteName_ + " » ?");
+        lines.emplace_back("[Entree]  Confirmer la suppression");
+        lines.emplace_back("[Esc]     Annuler");
+    } else {
+        std::vector<T4CCharacterSlot> slots;
+        int maxPerAccount = 0;
+        T4CLoginSessionCopyCharacterList(&slots, &maxPerAccount);
+        if (!slots.empty()) {
+            lines.emplace_back("[Entree]  Jouer avec le personnage selectionne");
+        }
+        char createLine[96];
+        std::snprintf(createLine, sizeof(createLine), "[C]       Creer un personnage (%zu/%d)",
+                      slots.size(), maxPerAccount);
+        lines.emplace_back(createLine);
+        if (!slots.empty()) {
+            lines.emplace_back("[D]       Supprimer le personnage selectionne");
+        }
+        lines.emplace_back("[I]       Introduction — recit de l'Haruspice");
+        lines.emplace_back("[Esc]     Retour login");
+    }
+#else
+    (void)renderer;
+    (void)textMuted;
+#endif
+    if (lines.empty()) {
+        return;
+    }
+
+    float y = static_cast<float>(kLogicalHeight) - kFooterBottomPad -
+              static_cast<float>(lines.size()) * kFooterRowH;
+    for (const std::string &line : lines) {
+        drawUiText(renderer, line.c_str(), kPaddingX, y, textMuted);
+        y += kFooterRowH;
+    }
+}
+
 void CharacterSelectScreen::Render(SDL_Renderer *renderer) {
+    if (introduction_.isOpen()) {
+        introduction_.Render(renderer, chrome_);
+        return;
+    }
+
     if (chrome_) {
         chrome_->renderBackground(renderer);
     } else {
@@ -162,7 +328,9 @@ void CharacterSelectScreen::Render(SDL_Renderer *renderer) {
     const SDL_Color textSel{180, 220, 255, 255};
 
     drawUiText(renderer, "The 4th Coming — Selection du personnage", kPaddingX, 48.0f, textMain);
-    drawUiText(renderer, statusLine_.c_str(), kPaddingX, 80.0f, textMuted);
+    if (statusLocked_ && !statusLine_.empty()) {
+        drawUiText(renderer, statusLine_.c_str(), kPaddingX, 80.0f, textMuted);
+    }
 
     float y = kListY;
     for (std::size_t i = 0; i < displayLines_.size(); ++i) {
@@ -179,6 +347,8 @@ void CharacterSelectScreen::Render(SDL_Renderer *renderer) {
         }
         y += kRowH;
     }
+
+    renderActionFooter(renderer, textMuted);
 
     if (chrome_) {
         chrome_->renderBanner(renderer);
