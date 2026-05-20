@@ -74,6 +74,8 @@ set(SOURCES
     src/gui/T4CUiFont.cpp
     src/gui/T4CScrollingBanner.cpp
     src/gui/LauncherChrome.cpp
+    src/audio/T4CGameMusic.cpp
+    src/audio/T4CGameMusicZone.cpp
     src/network/T4CNetworkDebugLog.cpp
     src/network/T4CLoginSession.cpp
     src/network/IOCPCompat.cpp

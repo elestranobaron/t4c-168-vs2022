@@ -2,6 +2,7 @@
 
 #include "game/TncDataPaths.h"
 #include "network/T4CLoginSession.h"
+#include "audio/T4CGameMusic.h"
 #include "Sdl3FramePresenter.h"
 #include "tnc_sdl3.h"
 
@@ -251,6 +252,13 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
     dispInfos_ = false;
     ready_ = true;
     SDL_Log("[GameWorld] data=%s joueur=%u,%u zone=%u", dataRoot_.c_str(), playerX_, playerY_, zone_);
+#if defined(LINUX_PORT)
+    {
+        T4CActivePlayer active{};
+        T4CLoginSessionGetActivePlayer(&active);
+        T4CGameMusic::LoadNewSound(zone_, playerX_, playerY_, active.level);
+    }
+#endif
     return true;
 }
 
@@ -454,6 +462,12 @@ void GameWorldScreen::Update() {
         mapFlag_ = true;
         snapPlayerVisual(teleport.x, teleport.y);
         setPlayerWalkAnim(false);
+        T4CGameMusic::Reset();
+        {
+            T4CActivePlayer active{};
+            T4CLoginSessionGetActivePlayer(&active);
+            T4CGameMusic::LoadNewSound(zone_, teleport.x, teleport.y, active.level);
+        }
     }
 #endif
 
@@ -475,6 +489,7 @@ void GameWorldScreen::Update() {
             setPlayerFacingFromDelta(dx, dy);
         }
         setPlayerWalkAnim(false);
+        T4CGameMusic::LoadNewSound(zone_, popup.serverX, popup.serverY, popup.level);
     }
 #endif
 

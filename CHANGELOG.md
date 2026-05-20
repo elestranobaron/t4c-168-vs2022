@@ -4,6 +4,81 @@ Historique des modifications du client sous `#ifdef LINUX_PORT` et de la documen
 
 ---
 
+## 2026-05-20 — Musique de fond (GameMusic → SDL3 audio)
+
+### Contexte
+
+Sous Windows 1.68, toute la logique musicale est **100 % client** (`GameMusic.cpp` + `NewSound.cpp` / DirectSound) : le serveur n’envoie ni piste ni fichier — seulement `Player.World` et les coords. Le client Linux avait les **WAV** sous `$T4C_DATA/sons/` (~11–15 Mo par piste) mais **aucune lecture**.
+
+**Validation utilisateur :** *« c’est un perfect »* — Sadness à la sélection, musique de zone en jeu, transitions OK.
+
+---
+
+### Ce qui a été fait
+
+#### A. Logique de zones — `T4CGameMusicZone.cpp/.h`
+
+- Port **intégral** des macros `Track45` / `Track90` et règles par monde depuis `GameMusic.cpp` Windows.
+- 8 pistes : Boss, Outdoors, Forest, Dungeons, Caverns, Sadness, Silence, Noises.
+- `T4CGameMusicPickTrack(world, x, y, level)` + `T4CGameMusicTrackBaseName(id)` → noms VSB (`"Forest Music"`, …).
+
+#### B. Lecteur SDL3 — `T4CGameMusic.cpp/.h`
+
+- **Pas de SDL_mixer** : `SDL_INIT_AUDIO`, `SDL_LoadWAV`, `SDL_OpenAudioDeviceStream`, callback de **boucle** (`SDL_PutAudioStreamData`).
+- Fichiers : `$T4C_DATA/sons/{nom}.wav` (ex. `Sadness Music.wav`).
+- Volume par défaut **75 %** (`SDL_SetAudioStreamGain`) ; API `SetVolume(0..1)`.
+- Ne recharge pas si la piste est déjà active (`g_oldTrackId`, comme `dwOldMusicNumber` Windows).
+
+| Méthode | Équivalent Windows | Déclencheur |
+|---------|-------------------|-------------|
+| `Init()` / `Shutdown()` | init DirectSound | démarrage / quit app |
+| `StartCharacterSelect()` | `g_GameMusic.Start()` | après auth → liste persos |
+| `LoadNewSound(w,x,y,level)` | `LoadNewSound()` | entrée monde, opcode 1, téléport |
+| `Reset()` | `g_GameMusic.Reset()` | avant `LoadNewSound` post-téléport |
+| `Stop()` | `g_GameMusic.Stop()` | retour login |
+
+#### C. Branchements
+
+| Fichier | Rôle |
+|---------|------|
+| `src/main.cpp` | `SDL_INIT_AUDIO`, `Init`, `StartCharacterSelect` à l’opcode 26, `Stop` au retour login, `Shutdown` |
+| `src/game/GameWorldScreen.cpp` | `LoadNewSound` à `Init` ; `Reset`+`LoadNewSound` sur opcode **57** ; `LoadNewSound` sur ack move opcode **1** |
+| `CMakeLists.txt` | `T4CGameMusic.cpp`, `T4CGameMusicZone.cpp` |
+
+---
+
+### Parité Windows
+
+| Écran / événement | Piste attendue | Statut |
+|-------------------|----------------|--------|
+| Sélection / création perso | Sadness Music | ✓ |
+| Entrée monde (13 → Init) | Forest / Dungeon / Cavern + zones | ✓ |
+| Déplacement (opcode 1) | recalcule zone | ✓ (comme `Packet.cpp:4559`) |
+| Téléport (opcode 57) | Reset + nouvelle zone | ✓ |
+
+---
+
+### Limites restantes (Phase 2 audio)
+
+| Sujet | Statut |
+|-------|--------|
+| **SFX** (combat, pas, UI) | Non porté (`NewSound.cpp`, `SoundFX[]`) |
+| **Volume menu options** | Pas d’UI — `SetVolume()` disponible |
+| **RAM** | WAV entier chargé en mémoire (~15 Mo/piste) — OK pour 1 piste streaming |
+| **CD audio** (`bUseCD`) | Ignoré (obsolète) |
+
+---
+
+### Logs attendus
+
+```text
+[GameMusic] init OK
+[GameMusic] lecture …/data/sons/Sadness Music.wav
+[GameMusic] lecture …/data/sons/Forest Music.wav
+```
+
+---
+
 ## 2026-05-20 — Création personnage (25/31/26/13), introduction Haruspice, sélection persos enrichie
 
 ### Contexte — ce qu’on a enduré
@@ -159,7 +234,7 @@ Après validation du rendu monde (SDL3 natif, couleurs, téléport opcode **57**
 | **Timeout 25 sans réponse serveur** | Workaround cleanup **15** ; cause racine serveur (picklock / async) à investiguer si persiste |
 | **Delete code 3** | Migration SQL **serveur** requise si colonne `PlayerName` trop courte |
 | **Sprites création Windows** | Pas de fond `J_Back` / boutons `.dec` — UI texte SDL3 minimaliste |
-| **Musique « Sadness Music »** | Toujours absente (Phase audio) |
+| **Musique « Sadness Music »** | **Fait** — voir entrée musique **2026-05-20** |
 | **Entrée intro depuis login** | Non — volontaire |
 
 ---
@@ -359,7 +434,7 @@ third_party/tnc_sdl3/render/Sdl3FramePresenter.h
 |---------|--------|
 | SideMenu panels complets (minimap TMI, chat, inventaire…) | Placeholder — sprites OK, logique panels non |
 | Écran création personnage + opcode 25 | **Fait** — voir entrée **2026-05-20** (création / reroll) |
-| Musique Phase 1 (`LoadNewSound`) | Non commencé |
+| Musique Phase 1 (`LoadNewSound`) | **Fait** — voir entrée musique **2026-05-20** |
 | Opcode 43 (level serveur autoritatif) | Level affiché = slot opcode 26 uniquement |
 | Couche `env` / torche.png (jour-nuit test mestoph) | Absente du client (overlay luminosité test_mapinterface) |
 | Tests legacy `test_mapinterface.cpp` / `test_npcmanager.cpp` (SDL 1.2) | Non migrés — hors build `t4c_client` |
@@ -687,7 +762,7 @@ Voir section **2026-05-20** ci-dessus. Avant ce commit : pas de handler 57, pas 
 | **Collision** | Autorité serveur (WDA) ; pas d’affichage client du refus de move (opcode 1 sans déplacement). |
 | **Autres joueurs / PNJ** | Pas de rendu des unités réseau (opcode **69** `UnitUpdate`, etc.). |
 | **Objets sol** | Opcode **16** (peripheric objects) non géré à l’écran. |
-| **Musique / SFX** | Fichiers WAV sous `data/sons/` présents ; pas de `GameMusic.cpp` / SDL_mixer — pas de « Sadness Music » ni musique de zone après 13. |
+| **Musique / SFX** | **Musique zone** ✓ (`T4CGameMusic`) ; SFX combat/UI **non portés** |
 | **Opcodes monde** | Beaucoup de paquets post-46 seulement **logués** (**43** stats, **60** near units, **131**, chat, combat, loot, UI…) — voir `CLIENT168_RC14h_OK/.../packethandling.cpp`. |
 | **WDA côté client** | **Hors scope** — le client ne lit jamais les `.WDA`. |
 
@@ -722,8 +797,8 @@ Voir section **2026-05-20** ci-dessus. Avant ce commit : pas de handler 57, pas 
 
 #### Client — audio
 
-- [ ] Porter **`GameMusic.cpp`** / **`NewSound.cpp`** : DirectSound → SDL3 audio ou SDL_mixer.
-- [ ] Pistes : `"Sadness Music"` (liste persos), puis `LoadNewSound()` après opcode **13** (zone + coords), fichiers sous `$T4C_DATA/sons/`.
+- [x] **`GameMusic.cpp`** → `T4CGameMusic` + `T4CGameMusicZone` (SDL3 audio, WAV `data/sons/`)
+- [ ] **SFX** : porter `NewSound.cpp` / `SoundFX[]` (DirectSound → SDL3)
 
 #### Client — polish & ops
 

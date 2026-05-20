@@ -3993,6 +3993,7 @@ void RunCommandThread(LPVOID pParam)
 #include "gui/LauncherChrome.h"
 #include "gui/LoginScreen.h"
 #include "network/T4CLoginSession.h"
+#include "audio/T4CGameMusic.h"
 
 #if T4C_HAS_WORLD_VIEW
 #include "game/GameWorldScreen.h"
@@ -4009,7 +4010,7 @@ int main(int argc, char *argv[])
     (void)argc;
     (void)argv;
 
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
         return 1;
     }
 
@@ -4035,6 +4036,10 @@ int main(int argc, char *argv[])
     LauncherChrome launcherChrome;
     if (!launcherChrome.init(renderer)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "[main] LauncherChrome partiel (police/fond).");
+    }
+
+    if (!T4CGameMusic::Init()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "[main] Audio indisponible — jeu sans musique.");
     }
 
     LoginScreen login(renderer, &launcherChrome);
@@ -4063,6 +4068,7 @@ int main(int argc, char *argv[])
                 if (!characterSelect.HandleEvent(event, window)) {
                     T4CLoginSessionAbortLogin();
                     T4CLoginSessionResetAfterReturnToLogin();
+                    T4CGameMusic::Stop();
                     phase = AppPhase::Login;
                     SDL_SetWindowTitle(window, "T4C (Linux SDL3)");
                     SDL_StartTextInput(window);
@@ -4086,6 +4092,7 @@ int main(int argc, char *argv[])
                     T4CLoginSessionDisconnectInGame();
                     world.Shutdown();
                     T4CLoginSessionResetAfterReturnToLogin();
+                    T4CGameMusic::Stop();
                     phase = AppPhase::Login;
                     SDL_SetWindowTitle(window, "T4C (Linux SDL3)");
                     SDL_SetWindowSize(window, 800, 600);
@@ -4114,6 +4121,7 @@ int main(int argc, char *argv[])
                 phase = AppPhase::CharacterSelect;
                 SDL_StopTextInput(window);
                 SDL_SetWindowTitle(window, "T4C — personnages");
+                T4CGameMusic::StartCharacterSelect();
                 SDL_Log("[main] Passage ecran selection personnage.");
             }
 
@@ -4211,6 +4219,7 @@ int main(int argc, char *argv[])
                 phase = AppPhase::CharacterSelect;
                 SDL_SetWindowTitle(window, "T4C — personnages");
                 SDL_StopTextInput(window);
+                T4CGameMusic::StartCharacterSelect();
                 SDL_Log("[main] Personnage cree — retour selection.");
             }
 
@@ -4237,6 +4246,7 @@ int main(int argc, char *argv[])
 #endif
     T4CLoginSessionShutdown();
 
+    T4CGameMusic::Shutdown();
     launcherChrome.shutdown();
 
     SDL_DestroyRenderer(renderer);
