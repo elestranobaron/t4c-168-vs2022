@@ -21,6 +21,8 @@ struct T4CEnterWorldSpawn {
 struct T4CActivePlayer {
     std::string name;
     std::uint16_t race{0};
+    /** Niveau connu (opcode 26 a la selection ; maj future opcode 43). */
+    std::uint16_t level{0};
     /** ID apparence serveur (10001–10004 mâle, 15001–15004 femelle). 0 = déduire de race. */
     std::uint16_t appearance{0};
     unsigned int serverX{0};

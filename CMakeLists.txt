@@ -68,6 +68,9 @@ set(SOURCES
     src/gui/LoginScreen.cpp
     src/gui/CharacterSelectScreen.cpp
     src/gui/LoginClientConfig.cpp
+    src/gui/T4CUiFont.cpp
+    src/gui/T4CScrollingBanner.cpp
+    src/gui/LauncherChrome.cpp
     src/network/T4CNetworkDebugLog.cpp
     src/network/T4CLoginSession.cpp
     src/network/IOCPCompat.cpp

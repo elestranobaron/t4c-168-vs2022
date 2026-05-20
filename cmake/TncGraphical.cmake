@@ -1,19 +1,25 @@
-# Sources TnC (mestoph) + shim SDL3 — code compile dans t4c_client (≠ T4C_DATA runtime).
+# Sources TnC (mestoph) SDL3 natif — code compile dans t4c_client (≠ T4C_DATA runtime).
+#
+# Ordre de priorite a chaque configure :
+#   1. client_graphical_sdl3_test/TnC_dev                — TnC patche SDL3 (compile)
+#   2. client_graphical_path_to_follow/decode/TnC_dev    — labo mestoph (fallback)
 set(_TNC_ROOT_CANDIDATES
-    "${CMAKE_SOURCE_DIR}/../client_graphical_path_to_follow/decode/TnC_dev"
     "${CMAKE_SOURCE_DIR}/../client_graphical_sdl3_test/TnC_dev"
+    "${CMAKE_SOURCE_DIR}/../client_graphical_path_to_follow/decode/TnC_dev"
 )
-if(NOT TNC_GRAPHICAL_ROOT OR NOT EXISTS "${TNC_GRAPHICAL_ROOT}/VSFInterface/vsfinterface.cpp")
-    set(TNC_GRAPHICAL_ROOT "")
-    foreach(_cand IN LISTS _TNC_ROOT_CANDIDATES)
-        if(EXISTS "${_cand}/VSFInterface/vsfinterface.cpp")
-            set(TNC_GRAPHICAL_ROOT "${_cand}")
-            break()
-        endif()
-    endforeach()
+
+set(_TNC_RESOLVED "")
+foreach(_cand IN LISTS _TNC_ROOT_CANDIDATES)
+    if(EXISTS "${_cand}/VSFInterface/vsfinterface.cpp")
+        set(_TNC_RESOLVED "${_cand}")
+        break()
+    endif()
+endforeach()
+
+if(_TNC_RESOLVED)
+    set(TNC_GRAPHICAL_ROOT "${_TNC_RESOLVED}" CACHE PATH
+        "Racine TnC_dev (sources MapInterface/VSFInterface — pas les assets .dec)" FORCE)
 endif()
-set(TNC_GRAPHICAL_ROOT "${TNC_GRAPHICAL_ROOT}" CACHE PATH
-    "Racine TnC_dev (sources MapInterface/VSFInterface — pas les assets .dec)")
 
 if(NOT TNC_GRAPHICAL_ROOT OR NOT EXISTS "${TNC_GRAPHICAL_ROOT}/VSFInterface/vsfinterface.cpp")
     message(WARNING "TNC_GRAPHICAL_ROOT invalide: ${TNC_GRAPHICAL_ROOT} — vue monde desactivee")
@@ -48,13 +54,14 @@ set(TNC_GRAPHICAL_SOURCES
 )
 
 set(TNC_GRAPHICAL_INCLUDES
-    ${CMAKE_SOURCE_DIR}/third_party/tnc_sdl3/include
-    ${CMAKE_SOURCE_DIR}/third_party/tnc_sdl3/render
+    ${TNC_GRAPHICAL_ROOT}/include
+    ${TNC_GRAPHICAL_ROOT}/render
     ${TNC_GRAPHICAL_ROOT}
 )
 
 set(TNC_GRAPHICAL_CLIENT_SOURCES
     ${CMAKE_SOURCE_DIR}/src/game/GameWorldScreen.cpp
     ${CMAKE_SOURCE_DIR}/src/game/TncDataPaths.cpp
-    ${CMAKE_SOURCE_DIR}/third_party/tnc_sdl3/render/Sdl3FramePresenter.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/WorldSideMenu.cpp
+    ${TNC_GRAPHICAL_ROOT}/render/Sdl3FramePresenter.cpp
 )

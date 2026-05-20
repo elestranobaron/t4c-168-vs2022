@@ -7,6 +7,8 @@
 
 #include "Sdl3FramePresenter.h"
 
+#include "gui/WorldSideMenu.h"
+
 class FontManager;
 class MAPInterface;
 class NPCManager;
@@ -39,6 +41,9 @@ class GameWorldScreen {
 
     bool ConsumeReturnToLogin();
 
+    /** True une fois si l'utilisateur a confirme « Quitter » dans le menu (Esc). */
+    bool ConsumeQuitApp();
+
     void Update();
 
     void Render(SDL_Renderer *renderer);
@@ -58,6 +63,10 @@ class GameWorldScreen {
     void setPlayerWalkAnim(bool walking);
     void pollHeldMovement();
     bool tryMovePlayer(std::uint16_t moveOpcode);
+    void drawOptionsPopup();
+    bool handleSideMenuKey(const SDL_Event &event);
+    bool handleOptionsPopupKey(const SDL_Event &event);
+    bool handleSideMenuMouse(const SDL_Event &event);
     SDL_Surface *makeLayer(int w, int h, bool with_alpha);
 
     SDL_Renderer *renderer_{nullptr};
@@ -84,6 +93,10 @@ class GameWorldScreen {
     bool dispInfos_{false};
     bool ready_{false};
     bool returnToLogin_{false};
+    bool quitApp_{false};
+    bool optionsPopupOpen_{false};
+    int optionsSelection_{0};
+    WorldSideMenu sideMenu_;
     bool playerNpcSpawned_{false};
     float fps_{0.f};
     std::string dataRoot_;

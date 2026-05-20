@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+class LauncherChrome;
+
 enum class LoginActiveField : int {
     Ip = 0,
     Port = 1,
@@ -21,7 +23,7 @@ class LoginScreen {
     static constexpr int kLogicalWidth = 800;
     static constexpr int kLogicalHeight = 600;
 
-    explicit LoginScreen(SDL_Renderer *renderer);
+    explicit LoginScreen(SDL_Renderer *renderer, LauncherChrome *chrome);
 
     /** false = quitter l'application (ex. Escape sur l'écran login). */
     bool HandleEvent(const SDL_Event &event, SDL_Window *window);
@@ -43,7 +45,10 @@ class LoginScreen {
     std::string *mutableActiveString();
     void refreshMatrixLogLines();
 
+    void drawUiText(SDL_Renderer *renderer, const char *text, float x, float y, SDL_Color color) const;
+
     SDL_Renderer *renderer_{nullptr};
+    LauncherChrome *chrome_{nullptr};
 
     std::string ipStr_;
     std::string portStr_;

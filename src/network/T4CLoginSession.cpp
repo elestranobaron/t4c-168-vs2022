@@ -1390,6 +1390,7 @@ bool T4CLoginSessionRequestPutPlayerInGame(const std::string &playerName) {
         for (const T4CCharacterSlot &slot : g_characterList) {
             if (slot.name == playerName) {
                 g_activePlayer.race = slot.race;
+                g_activePlayer.level = slot.level;
                 break;
             }
         }

@@ -1,5 +1,7 @@
 #include "gui/CharacterSelectScreen.h"
 
+#include "gui/LauncherChrome.h"
+
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -23,8 +25,19 @@ bool KeyDown(const SDL_Event &event, SDL_Scancode sc) {
 
 }  // namespace
 
-CharacterSelectScreen::CharacterSelectScreen(SDL_Renderer *renderer) : renderer_(renderer) {
+CharacterSelectScreen::CharacterSelectScreen(SDL_Renderer *renderer, LauncherChrome *chrome)
+    : renderer_(renderer), chrome_(chrome) {
     statusLine_ = "Chargement liste…";
+}
+
+void CharacterSelectScreen::drawUiText(SDL_Renderer *renderer, const char *text, const float x,
+                                       const float y, const SDL_Color color) const {
+    if (chrome_ && chrome_->font().isReady()) {
+        chrome_->font().drawText(renderer, text, x, y, color);
+        return;
+    }
+    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+    SDL_RenderDebugText(renderer, x, y, text);
 }
 
 void CharacterSelectScreen::refreshFromSession() {
@@ -130,28 +143,44 @@ void CharacterSelectScreen::Update() {
 #if defined(LINUX_PORT)
     T4CLoginSessionPollBackgroundTasks();
 #endif
+    if (chrome_) {
+        chrome_->update();
+    }
     refreshFromSession();
 }
 
 void CharacterSelectScreen::Render(SDL_Renderer *renderer) {
-    SDL_SetRenderDrawColor(renderer, 22, 26, 34, 255);
-    SDL_RenderClear(renderer);
+    if (chrome_) {
+        chrome_->renderBackground(renderer);
+    } else {
+        SDL_SetRenderDrawColor(renderer, 22, 26, 34, 255);
+        SDL_RenderClear(renderer);
+    }
 
-    SDL_SetRenderDrawColor(renderer, 200, 210, 220, 255);
-    SDL_RenderDebugText(renderer, kPaddingX, 48.0f, "T4C — Selection du personnage");
-    SDL_RenderDebugText(renderer, kPaddingX, 80.0f, statusLine_.c_str());
+    const SDL_Color textMain{230, 230, 240, 255};
+    const SDL_Color textMuted{200, 210, 220, 255};
+    const SDL_Color textSel{180, 220, 255, 255};
+
+    drawUiText(renderer, "The 4th Coming — Selection du personnage", kPaddingX, 48.0f, textMain);
+    drawUiText(renderer, statusLine_.c_str(), kPaddingX, 80.0f, textMuted);
 
     float y = kListY;
     for (std::size_t i = 0; i < displayLines_.size(); ++i) {
         if (static_cast<int>(i) == selectedIndex_) {
             SDL_FRect hl{kPaddingX - 8.0f, y - 4.0f, 704.0f, kRowH};
-            SDL_SetRenderDrawColor(renderer, 48, 72, 96, 255);
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, 48, 72, 96, 200);
             SDL_RenderFillRect(renderer, &hl);
             SDL_SetRenderDrawColor(renderer, 120, 160, 200, 255);
+            SDL_RenderRect(renderer, &hl);
+            drawUiText(renderer, displayLines_[i].c_str(), kPaddingX, y, textSel);
         } else {
-            SDL_SetRenderDrawColor(renderer, 160, 170, 180, 255);
+            drawUiText(renderer, displayLines_[i].c_str(), kPaddingX, y, textMuted);
         }
-        SDL_RenderDebugText(renderer, kPaddingX, y, displayLines_[i].c_str());
         y += kRowH;
+    }
+
+    if (chrome_) {
+        chrome_->renderBanner(renderer);
     }
 }

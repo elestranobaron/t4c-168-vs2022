@@ -4,6 +4,213 @@ Historique des modifications du client sous `#ifdef LINUX_PORT` et de la documen
 
 ---
 
+## 2026-05-19 — Vue monde SDL3 native, launcher graphique, HUD joueur, menu pause — fin du rendu sombre
+
+### Contexte — ce qui a été enduré
+
+Après l’entrée en jeu (pipeline 14→99→26→13→46→60, puis déplacement local `63fe2e2`, téléport opcode 57 `d445a41`), la **vue monde** restait difficile à valider visuellement :
+
+| Symptôme | Cause identifiée |
+|----------|------------------|
+| **Carte noire** après login | Renderer SDL3 **partagé** entre launcher (TTF, bandeau) et monde : `clip rect` / `color scale` laissés actifs ; une frame de sélection perso dessinée après bascule phase `World`. |
+| **Carte sombre / délavée** | Contournement `SDL_SetRenderColorScale` sur le renderer (polluait login) puis `SDL_SetTextureColorModFloat` à **1.6×** — masquait le problème sans le résoudre. |
+| **Confusion dossiers graphiques** | Cache CMake `TNC_GRAPHICAL_ROOT` pointant parfois vers `client_graphical_path_to_follow` (labo mestoph SDL2) au lieu de `client_graphical_sdl3_test/TnC_dev` ; deux copies du shim SDL2→SDL3 divergentes. |
+| **Rendu « sombre et dégueulasse »** (post-migration SDL3) | Palettes `.dec` chargées **sans canal alpha** (`SDL_Color.a` non initialisé → 0) ; blits index8→RGBA32 en SDL3 produisaient des pixels **transparents** ; layer sol effacé en transparent ; hack luminosité insuffisant. |
+
+**Résultat utilisateur avant fix palette :** fond noir dominant, tuiles fantômes, couleurs T4C (`Bright1`, etc.) absentes malgré F4/F5.
+
+**Résultat après fix (validation utilisateur) :** rendu couleurs correct, luminosité par défaut **1.0** — *« alleluia, c’est vraiment perfect »*.
+
+---
+
+### Ce qui a été fait
+
+#### A. Données joueur actif (HUD)
+
+- Champ **`level`** ajouté à `T4CActivePlayer` (`T4CLoginSession.h`).
+- Copie depuis le slot personnage (opcode **26**) dans `RequestPutPlayerInGame`.
+- Affichage in-game : `Nom niv X | coords | zone | lum | FPS` dans `GameWorldScreen::redraw()`.
+
+#### B. Menu pause (Esc) — plus de quit direct
+
+- Nouveau **`WorldSideMenu`** (`src/gui/WorldSideMenu.cpp/.h`) : sprites T4C `64kSideBox`, `64kSideButton*`.
+- **Esc** ouvre/ferme le panneau latéral (placeholder panels).
+- Bouton **Options** → popup Annuler / Retour login / Quitter.
+- `ConsumeQuitApp()` / `ConsumeReturnToLogin()` câblés dans `main.cpp`.
+
+#### C. Launcher graphique (login + sélection perso)
+
+- Police T4C **`t4cbeaulieux.ttf`** extraite de `data/fonts/t4c_beaulieux.zip`.
+- Nouveaux modules :
+  - `T4CUiFont` — rendu TTF SDL3 ;
+  - `T4CScrollingBanner` — bandeau défilant ;
+  - `LauncherChrome` — fond `LoadingScreen.bmp`, police, bandeau « markshptang ».
+- `LoginScreen` et `CharacterSelectScreen` utilisent ce chrome commun.
+- Fichiers ajoutés au **`CMakeLists.txt`**.
+
+#### D. Correctifs écran noir (transition login → monde)
+
+| Fichier | Fix |
+|---------|-----|
+| `Sdl3FramePresenter.cpp` | Reset `SDL_SetRenderClipRect(nullptr)` + `SDL_SetRenderColorScale(1.f)` en début de `present()`. |
+| `LauncherChrome.cpp` | Reset renderer après rendu bandeau TTF. |
+| `main.cpp` | Reset renderer avant `world.Init` ; pas de frame CharacterSelect si phase déjà `World` ; ordre `SetLogicalPresentation` avant `Init`. |
+
+#### E. Migration moteur TnC : SDL3 natif (suppression shim)
+
+**Objectif :** ne plus dépendre de `third_party/tnc_sdl3/` (faux `SDL/SDL.h`, `tnc_sdl2_compat.h` ~156 lignes de macros SDL2).
+
+| Avant | Après |
+|-------|-------|
+| `third_party/tnc_sdl3/include/SDL/SDL.h` → shim | `#include <SDL3/SDL.h>` direct |
+| Macros `SDL_CreateRGBSurface`, `SDL_FreeSurface`, … | Helpers explicites `tnc_sdl3.h` (~80 lignes) |
+| `Sdl3FramePresenter` dans `third_party/` | `client_graphical_sdl3_test/TnC_dev/render/` |
+| Sources TnC + shim dupliqués | Une seule racine compile : `client_graphical_sdl3_test/TnC_dev` |
+
+**`cmake/TncGraphical.cmake` — priorité forcée à chaque configure :**
+
+1. `../client_graphical_sdl3_test/TnC_dev` (TnC patché SDL3, **compilé**)
+2. `../client_graphical_path_to_follow/decode/TnC_dev` (fallback labo mestoph)
+
+**Modules TnC migrés** (via symlinks `FontManager/`, `VSFInterface/`, `NPCManager/`, `TextManager/` + `MapInterface/` local dans sdl3_test) :
+
+- `FontManager/fontmanager.cpp/.h`
+- `VSFInterface/vsfinterface.h`, `vsfi_read_sprite.cpp`, `vsfi_sprites.cpp`, `vsfi_indexage_pal.cpp`
+- `TextManager/textmanager.cpp`
+- `NPCManager/npc_draw.cpp`, `npc_ajout.cpp`
+- `MapInterface/mapi_full_redraw.cpp`, `mapi_move_map.cpp`, `mapi_get_map.cpp`
+
+**Supprimé du dépôt client :**
+
+```
+third_party/tnc_sdl3/include/tnc_sdl2_compat.h
+third_party/tnc_sdl3/include/SDL/SDL.h
+third_party/tnc_sdl3/include/SDL/SDL_image.h
+third_party/tnc_sdl3/render/Sdl3FramePresenter.cpp
+third_party/tnc_sdl3/render/Sdl3FramePresenter.h
+```
+
+#### F. Correctif rendu couleurs (fix définitif — palette + bake RGBA)
+
+| Problème | Correction |
+|----------|------------|
+| `vsfi_indexage_pal.cpp` : R,G,B lus, **`.a` jamais posé** | `np->rgb[i].a = 255` pour les 256 entrées |
+| Sprites restés en INDEX8 au blit vers layers RGBA | `TnC_BakeIndexedSprite()` : conversion **RGBA32 au chargement** après palette + colorkey (`vsfi_read_sprite.cpp`) |
+| Layer sol initialisé transparent | `mapi_get_map.cpp` : fill sol **`0xFF000000`** (noir opaque) |
+| Zone redraw sol en `0x000000FF` (alpha=0 en ARGB) | `mapi_full_redraw.cpp` : **`0xFF000000`** |
+| Luminosité hack 1.6× masquant le bug | `Sdl3FramePresenter` + `GameWorldScreen` : défaut **1.0** ; F4/F5 conserve la plage 1.0–3.0 |
+
+**Helper central :** `client_graphical_sdl3_test/TnC_dev/include/tnc_sdl3.h`
+
+- `TnC_MapArgb`, `TnC_CreateRgbaSurface`, `TnC_CreateIndexedSurfaceFrom`
+- `TnC_FillArgb`, `TnC_SetPalette`, `TnC_SetColorKeyIndex`
+- `TnC_BakeIndexedSprite`, `TnC_GetTicksMs`, `TnC_SetSurfaceAlpha`
+
+---
+
+### Nettoyé
+
+- Dossier **`third_party/tnc_sdl3/`** vidé (shim obsolète).
+- Doublons shim dans `client_graphical_sdl3_test/TnC_dev/include/` (`tnc_sdl2_compat.h`, faux `SDL/SDL.h`) supprimés.
+- CMake : includes pointent uniquement vers `TnC_dev/include` + `TnC_dev/render` (plus de `third_party/tnc_sdl3`).
+- `TncGraphical.cmake` : résolution automatique de la racine TnC à chaque configure (évite cache CMake bloqué sur mauvais dossier).
+
+---
+
+### Corrigé (récapitulatif)
+
+| Zone | Fix |
+|------|-----|
+| Transition login → monde | Écran noir (renderer pollué) |
+| Rendu carte | Couleurs palettes `.dec` + sprites opaques |
+| Build | Source TnC unifiée sur `client_graphical_sdl3_test` |
+| UX Esc | Menu pause au lieu de quitter |
+| HUD | Niveau personnage visible |
+
+---
+
+### Amélioré
+
+- **Launcher** : fond BMP + police Beaulieux + bandeau crédits (parité visuelle Windows partielle).
+- **SideMenu** : base graphique sprites `.dec` (panels cliquables = placeholder).
+- **Luminosité** : réglage F4/F5 sur texture finale (`SDL_SetTextureColorModFloat`) sans toucher au renderer login.
+- **Architecture documentée** (dans cette entrée et conversations associées) :
+
+| Chemin | Rôle |
+|--------|------|
+| `client/` | Exécutable Linux (réseau, GUI, `GameWorldScreen`) |
+| `client/data/` (`T4C_DATA`) | Assets runtime `.dec`, `.rmap`, fonts, NPCList |
+| `client_graphical_sdl3_test/TnC_dev/` | **Moteur mestoph compilé** dans `t4c_client` |
+| `client_graphical_path_to_follow/decode/` | Pipeline offline convert2, référence — **pas** source compile par défaut |
+| `CLIENT168_RC14h_OK/` | Référence Windows, jamais linké sous Linux |
+
+---
+
+### Fichiers modifiés — dépôt `client/`
+
+| Fichier | Rôle |
+|---------|------|
+| `CMakeLists.txt` | LauncherChrome, T4CUiFont, T4CScrollingBanner, WorldSideMenu |
+| `cmake/TncGraphical.cmake` | SDL3 natif, priorité sdl3_test, includes TnC_dev |
+| `src/game/GameWorldScreen.cpp/.h` | HUD level, SideMenu, luminosité, tnc_sdl3, popup options |
+| `src/gui/WorldSideMenu.cpp/.h` | Menu pause graphique (nouveau) |
+| `src/gui/LauncherChrome.cpp/.h` | Chrome login/sélection (nouveau) |
+| `src/gui/T4CUiFont.cpp/.h` | Police TTF (nouveau) |
+| `src/gui/T4CScrollingBanner.cpp/.h` | Bandeau défilant (nouveau) |
+| `src/gui/LoginScreen.cpp/.h` | Intégration LauncherChrome |
+| `src/gui/CharacterSelectScreen.cpp/.h` | Intégration LauncherChrome |
+| `src/main.cpp` | Phases, reset renderer, SideMenu/quit |
+| `src/network/T4CLoginSession.cpp/.h` | `level` dans active player |
+| `third_party/tnc_sdl3/**` | **Supprimé** (shim SDL2→SDL3) |
+
+### Fichiers modifiés — moteur TnC (repo `client_graphical_path_to_follow/decode/TnC_dev/`, compilé via symlinks sdl3_test)
+
+| Fichier | Rôle |
+|---------|------|
+| `FontManager/fontmanager.cpp/.h` | SDL3 + `tnc_sdl3.h` |
+| `VSFInterface/vsfinterface.h` | `#include <SDL3/SDL.h>` |
+| `VSFInterface/vsfi_indexage_pal.cpp` | **alpha palette = 255** |
+| `VSFInterface/vsfi_read_sprite.cpp` | bake RGBA au load |
+| `VSFInterface/vsfi_sprites.cpp` | `SDL_DestroySurface` |
+| `TextManager/textmanager.cpp` | SDL3 helpers |
+| `NPCManager/npc_draw.cpp`, `npc_ajout.cpp` | SDL3 helpers |
+
+### Fichiers modifiés — repo `client_graphical_sdl3_test/TnC_dev/`
+
+| Fichier | Rôle |
+|---------|------|
+| `include/tnc_sdl3.h` | **Nouveau** — helpers SDL3 natifs |
+| `render/Sdl3FramePresenter.cpp/.h` | Présentation + reset clip/scale + luminosité texture |
+| `MapInterface/mapi_*.cpp` | SDL3 natif, fills sol opaques |
+| `test_mapinterface_sdl3.cpp` | SDL3_image direct, helpers |
+| `CMakeLists.txt` | Includes sans faux SDL/ |
+
+---
+
+### Non inclus / limites restantes (volontairement)
+
+| Élément | Statut |
+|---------|--------|
+| SideMenu panels complets (minimap TMI, chat, inventaire…) | Placeholder — sprites OK, logique panels non |
+| Écran création personnage + opcode 25 | Non commencé |
+| Musique Phase 1 (`LoadNewSound`) | Non commencé |
+| Opcode 43 (level serveur autoritatif) | Level affiché = slot opcode 26 uniquement |
+| Couche `env` / torche.png (jour-nuit test mestoph) | Absente du client (overlay luminosité test_mapinterface) |
+| Tests legacy `test_mapinterface.cpp` / `test_npcmanager.cpp` (SDL 1.2) | Non migrés — hors build `t4c_client` |
+| `build_backup/`, `key_swaps/`, `second_approach/`, `data/` non suivis | Commits séparés recommandés |
+
+---
+
+### Commits sœurs recommandés
+
+Ce changelog documente un lot qui touche **trois arborescences** :
+
+1. **`client/`** — exécutable, GUI, CMake, suppression shim
+2. **`client_graphical_path_to_follow/decode/TnC_dev/`** — modules mestoph symlinkés
+3. **`client_graphical_sdl3_test/TnC_dev/`** — MapInterface local, `tnc_sdl3.h`, presenter
+
+---
+
 ## 2026-05-20 — Téléport escaliers / changement de carte (opcode 57, `RQ_TeleportPlayer`)
 
 ### Contexte

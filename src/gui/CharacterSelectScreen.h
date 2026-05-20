@@ -5,13 +5,15 @@
 #include <string>
 #include <vector>
 
+class LauncherChrome;
+
 /** Ecran liste persos (apres auth, avant opcode 13). */
 class CharacterSelectScreen {
    public:
     static constexpr int kLogicalWidth = 800;
     static constexpr int kLogicalHeight = 600;
 
-    explicit CharacterSelectScreen(SDL_Renderer *renderer);
+    explicit CharacterSelectScreen(SDL_Renderer *renderer, LauncherChrome *chrome);
 
     bool HandleEvent(const SDL_Event &event, SDL_Window *window);
 
@@ -27,8 +29,10 @@ class CharacterSelectScreen {
    private:
     void refreshFromSession();
     void tryEnterWorld(SDL_Window *window);
+    void drawUiText(SDL_Renderer *renderer, const char *text, float x, float y, SDL_Color color) const;
 
     SDL_Renderer *renderer_{nullptr};
+    LauncherChrome *chrome_{nullptr};
     bool stay_{true};
     int selectedIndex_{0};
     std::vector<std::string> displayLines_;

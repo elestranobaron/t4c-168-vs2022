@@ -3989,6 +3989,7 @@ void RunCommandThread(LPVOID pParam)
 #include <SDL3/SDL_main.h>
 
 #include "gui/CharacterSelectScreen.h"
+#include "gui/LauncherChrome.h"
 #include "gui/LoginScreen.h"
 #include "network/T4CLoginSession.h"
 
@@ -4030,8 +4031,13 @@ int main(int argc, char *argv[])
                                    LoginScreen::kLogicalHeight,
                                    SDL_LOGICAL_PRESENTATION_LETTERBOX);
 
-    LoginScreen login(renderer);
-    CharacterSelectScreen characterSelect(renderer);
+    LauncherChrome launcherChrome;
+    if (!launcherChrome.init(renderer)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "[main] LauncherChrome partiel (police/fond).");
+    }
+
+    LoginScreen login(renderer, &launcherChrome);
+    CharacterSelectScreen characterSelect(renderer, &launcherChrome);
     SDL_StartTextInput(window);
 
     AppPhase phase = AppPhase::Login;
@@ -4064,6 +4070,9 @@ int main(int argc, char *argv[])
 #if T4C_HAS_WORLD_VIEW
             else {
                 world.HandleEvent(event);
+                if (world.ConsumeQuitApp()) {
+                    running = false;
+                }
                 if (world.ConsumeReturnToLogin()) {
                     T4CLoginSessionDisconnectInGame();
                     world.Shutdown();
@@ -4075,8 +4084,10 @@ int main(int argc, char *argv[])
                                                      LoginScreen::kLogicalWidth,
                                                      LoginScreen::kLogicalHeight,
                                                      SDL_LOGICAL_PRESENTATION_LETTERBOX);
+                    SDL_SetRenderClipRect(renderer, nullptr);
+                    SDL_SetRenderColorScale(renderer, 1.f);
                     SDL_StartTextInput(window);
-                    SDL_Log("[main] Retour ecran login (Esc depuis le monde).");
+                    SDL_Log("[main] Retour ecran login (menu depuis le monde).");
                 }
             }
 #endif
@@ -4108,14 +4119,16 @@ int main(int argc, char *argv[])
             if (T4CLoginSessionConsumeEnterWorldReady(&spawn)) {
 #if T4C_HAS_WORLD_VIEW
                 SDL_StopTextInput(window);
+                SDL_SetWindowTitle(window, "T4C — monde (SDL3)");
+                SDL_SetWindowSize(window, 1600, 900);
+                SDL_SetRenderLogicalPresentation(renderer,
+                                                 GameWorldScreen::kLogicalWidth,
+                                                 GameWorldScreen::kLogicalHeight,
+                                                 SDL_LOGICAL_PRESENTATION_LETTERBOX);
+                SDL_SetRenderClipRect(renderer, nullptr);
+                SDL_SetRenderColorScale(renderer, 1.f);
                 if (world.Init(renderer, window, spawn.x, spawn.y, spawn.world)) {
                     phase = AppPhase::World;
-                    SDL_SetWindowTitle(window, "T4C — monde (SDL3)");
-                    SDL_SetWindowSize(window, 1600, 900);
-                    SDL_SetRenderLogicalPresentation(renderer,
-                                                     GameWorldScreen::kLogicalWidth,
-                                                     GameWorldScreen::kLogicalHeight,
-                                                     SDL_LOGICAL_PRESENTATION_LETTERBOX);
                     SDL_Log("[main] Entree en jeu — carte @ %u,%u Z%u.", spawn.x, spawn.y,
                             static_cast<unsigned>(spawn.world));
                 } else {
@@ -4135,16 +4148,21 @@ int main(int argc, char *argv[])
 #endif
             }
 
-            SDL_SetRenderDrawColor(renderer, 18, 20, 26, 255);
-            SDL_RenderClear(renderer);
-            characterSelect.Render(renderer);
-            SDL_RenderPresent(renderer);
-            SDL_Delay(16);
+            if (phase == AppPhase::CharacterSelect) {
+                SDL_SetRenderDrawColor(renderer, 18, 20, 26, 255);
+                SDL_RenderClear(renderer);
+                characterSelect.Render(renderer);
+                SDL_RenderPresent(renderer);
+                SDL_Delay(16);
+            }
         }
 #if T4C_HAS_WORLD_VIEW
         else {
             T4CLoginSessionPollBackgroundTasks();
             world.Update();
+            if (world.ConsumeQuitApp()) {
+                running = false;
+            }
             SDL_Delay(5);
         }
 #endif
@@ -4154,6 +4172,8 @@ int main(int argc, char *argv[])
     world.Shutdown();
 #endif
     T4CLoginSessionShutdown();
+
+    launcherChrome.shutdown();
 
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

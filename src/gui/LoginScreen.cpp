@@ -8,6 +8,7 @@
 #include <string>
 
 #include "gui/LoginClientConfig.h"
+#include "gui/LauncherChrome.h"
 
 #if defined(LINUX_PORT)
 #include "network/T4CLoginSession.h"
@@ -50,8 +51,9 @@ std::string PasswordStars(size_t length) {
 
 }  // namespace
 
-LoginScreen::LoginScreen(SDL_Renderer *renderer)
+LoginScreen::LoginScreen(SDL_Renderer *renderer, LauncherChrome *chrome)
     : renderer_(renderer),
+      chrome_(chrome),
       portStr_{"11677"},
       ipFieldRect_{kFieldX, kRow1Y - 8.0f, kFieldIpW, kFieldH},
       portFieldRect_{kPortFieldX, kRow1Y - 8.0f, kPortFieldW, kFieldH},
@@ -61,7 +63,7 @@ LoginScreen::LoginScreen(SDL_Renderer *renderer)
       matrixConsoleRect_{kPaddingX,
                          kButtonY + kButtonH + 10.0f,
                          static_cast<float>(LoginScreen::kLogicalWidth) - 2.0f * kPaddingX,
-                         static_cast<float>(LoginScreen::kLogicalHeight) - (kButtonY + kButtonH + 18.0f)} {
+                         548.0f - (kButtonY + kButtonH + 10.0f)} {
     std::string lip;
     std::string lport;
     std::string llogin;
@@ -303,21 +305,41 @@ bool LoginScreen::HandleEvent(const SDL_Event &event, SDL_Window *window) {
     }
 }
 
+void LoginScreen::drawUiText(SDL_Renderer *renderer, const char *text, const float x, const float y,
+                             const SDL_Color color) const {
+    if (chrome_ && chrome_->font().isReady()) {
+        chrome_->font().drawText(renderer, text, x, y, color);
+        return;
+    }
+    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+    SDL_RenderDebugText(renderer, x, y, text);
+}
+
 void LoginScreen::Update() {
 #if defined(LINUX_PORT)
     T4CLoginSessionPollBackgroundTasks();
 #endif
+    if (chrome_) {
+        chrome_->update();
+    }
     refreshMatrixLogLines();
 }
 
 void LoginScreen::Render(SDL_Renderer *renderer) {
+    if (chrome_) {
+        chrome_->renderBackground(renderer);
+    }
+
     const LoginActiveField focus = activeField_;
+    const SDL_Color textMain{230, 230, 240, 255};
+    const SDL_Color textMuted{180, 180, 195, 255};
 
     auto drawFieldRect = [&](const SDL_FRect &r, bool selected) {
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         if (selected) {
-            SDL_SetRenderDrawColor(renderer, 52, 70, 90, 255);
+            SDL_SetRenderDrawColor(renderer, 52, 70, 90, 210);
         } else {
-            SDL_SetRenderDrawColor(renderer, 38, 42, 52, 255);
+            SDL_SetRenderDrawColor(renderer, 38, 42, 52, 190);
         }
         SDL_RenderFillRect(renderer, &r);
         if (selected) {
@@ -338,52 +360,42 @@ void LoginScreen::Render(SDL_Renderer *renderer) {
     SDL_SetRenderDrawColor(renderer, 100, 200, 130, 255);
     SDL_RenderRect(renderer, &connectButtonRect_);
 
-    SDL_SetRenderDrawColor(renderer, 230, 230, 240, 255);
-
     constexpr float ly1 = kRow1Y;
     constexpr float ly2 = kRow2Y;
     constexpr float ly3 = kRow3Y;
 
-    SDL_RenderDebugText(renderer, kPaddingX, ly1, "IP:");
+    drawUiText(renderer, "IP:", kPaddingX, ly1, textMain);
     {
         std::string line = ipStr_;
         line.insert(0, " ");
-        SDL_RenderDebugText(renderer, kFieldX + 10.0f, ly1, line.c_str());
+        drawUiText(renderer, line.c_str(), kFieldX + 10.0f, ly1, textMain);
     }
 
     constexpr float kPortLabelX = kPortFieldX - 56.0f;
-    SDL_RenderDebugText(renderer, kPortLabelX, ly1, "Port:");
+    drawUiText(renderer, "Port:", kPortLabelX, ly1, textMain);
     {
         std::string line = portStr_;
         line.insert(0, " ");
-        SDL_RenderDebugText(renderer, kPortFieldX + 8.0f, ly1, line.c_str());
+        drawUiText(renderer, line.c_str(), kPortFieldX + 8.0f, ly1, textMain);
     }
 
-    SDL_RenderDebugText(renderer, kPaddingX, ly2, "Login:");
+    drawUiText(renderer, "Login:", kPaddingX, ly2, textMain);
     {
         std::string line = loginStr_;
         line.insert(0, " ");
-        SDL_RenderDebugText(renderer, kFieldX + 10.0f, ly2, line.c_str());
+        drawUiText(renderer, line.c_str(), kFieldX + 10.0f, ly2, textMain);
     }
 
-    SDL_RenderDebugText(renderer, kPaddingX, ly3, "Password:");
+    drawUiText(renderer, "Password:", kPaddingX, ly3, textMain);
     {
         std::string line = PasswordStars(passwordStr_.size());
         line.insert(0, " ");
-        SDL_RenderDebugText(renderer, kFieldX + 10.0f, ly3, line.c_str());
+        drawUiText(renderer, line.c_str(), kFieldX + 10.0f, ly3, textMain);
     }
 
-    const char *btn = " Se connecter ";
-    const int btnLenChars = static_cast<int>(std::strlen(btn));
-    constexpr float glyph = static_cast<float>(SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE);
-    const float textW = static_cast<float>(btnLenChars) * glyph;
-    const float bx = connectButtonRect_.x + (connectButtonRect_.w - textW) * 0.5f;
-    const float by =
-        connectButtonRect_.y + (connectButtonRect_.h - static_cast<float>(SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE)) * 0.5f;
-    SDL_RenderDebugText(renderer, bx, by, btn);
+    drawUiText(renderer, "Se connecter", connectButtonRect_.x + 72.f, connectButtonRect_.y + 12.f, textMain);
 
-    SDL_SetRenderDrawColor(renderer, 180, 180, 195, 255);
-    SDL_RenderDebugText(renderer, kPaddingX, 48.0f, "T4C — Connexion (800x600 logique)");
+    drawUiText(renderer, "The 4th Coming — Connexion", kPaddingX, 48.0f, textMuted);
 
     /* Console Matrix (dernieres lignes en bas, defilement implicite). */
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -433,4 +445,8 @@ void LoginScreen::Render(SDL_Renderer *renderer) {
     }
 
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+
+    if (chrome_) {
+        chrome_->renderBanner(renderer);
+    }
 }

@@ -3,6 +3,7 @@
 #include "game/TncDataPaths.h"
 #include "network/T4CLoginSession.h"
 #include "Sdl3FramePresenter.h"
+#include "tnc_sdl3.h"
 
 #include <SDL3/SDL.h>
 
@@ -24,10 +25,21 @@ bool keyPressed(const SDL_Event &event, const SDL_Keycode key, const SDL_Scancod
 }
 
 void clampBrightness(float &b) {
-    if (b < 0.7f) {
-        b = 0.7f;
-    } else if (b > 2.0f) {
-        b = 2.0f;
+    if (b < 1.0f) {
+        b = 1.0f;
+    } else if (b > 3.0f) {
+        b = 3.0f;
+    }
+}
+
+void blitText(FontManager *fm, SDL_Surface *dest, int x, int y, const char *text, std::uint32_t color) {
+    if (!fm || !dest || !text) {
+        return;
+    }
+    if (SDL_Surface *s = fm->get_text(const_cast<char *>(text), color)) {
+        SDL_Rect dst{x, y, static_cast<int>(s->w), static_cast<int>(s->h)};
+        SDL_BlitSurface(s, nullptr, dest, &dst);
+        SDL_DestroySurface(s);
     }
 }
 
@@ -112,11 +124,8 @@ char *GameWorldScreen::DupCStr(const std::string &s) {
     return out;
 }
 
-SDL_Surface *GameWorldScreen::makeLayer(int w, int h, bool with_alpha) {
-    if (with_alpha) {
-        return SDL_CreateRGBSurface(SDL_HWSURFACE, w, h, 32, 0xFF000000, 0x00FF0000, 0x0000FF00, 0x000000FF);
-    }
-    return SDL_CreateRGBSurface(SDL_HWSURFACE, w, h, 32, 0xFF000000, 0x00FF0000, 0x0000FF00, 0x00000000);
+SDL_Surface *GameWorldScreen::makeLayer(int w, int h, bool /*with_alpha*/) {
+    return TnC_CreateRgbaSurface(w, h);
 }
 
 bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window) {
@@ -219,8 +228,8 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
     if (npcm_->ajout_npc(0, DupCStr(spriteName), static_cast<int>(px), static_cast<int>(py), 180)) {
         npcm_->set_action(0, 'S');
         playerNpcSpawned_ = true;
-        SDL_Log("[GameWorld] joueur « %s » sprite=%s @ %u,%u%s", active.name.c_str(), spriteName, px, py,
-                active.female ? " (F)" : "");
+        SDL_Log("[GameWorld] joueur « %s » niv %u sprite=%s @ %u,%u%s", active.name.c_str(),
+                static_cast<unsigned>(active.level), spriteName, px, py, active.female ? " (F)" : "");
     } else {
         SDL_Log("[GameWorld] echec ajout sprite joueur « %s » — verifier NPCList.txt", spriteName);
     }
@@ -231,7 +240,12 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
     }
 #endif
 
-    presenter_.setBrightnessScale(1.2f);
+    presenter_.setBrightnessScale(1.0f);
+
+    sideMenu_.init(vsfi_, kLogicalWidth, kLogicalHeight);
+    sideMenu_.setOpen(false);
+    optionsPopupOpen_ = false;
+    optionsSelection_ = 0;
 
     mapFlag_ = true;
     dispInfos_ = false;
@@ -335,6 +349,9 @@ bool GameWorldScreen::tryMovePlayer(const std::uint16_t moveOpcode) {
 }
 
 void GameWorldScreen::pollHeldMovement() {
+    if (sideMenu_.isOpen() || optionsPopupOpen_) {
+        return;
+    }
     const bool *const keys = SDL_GetKeyboardState(nullptr);
     if (!keys) {
         return;
@@ -370,14 +387,14 @@ void GameWorldScreen::pollHeldMovement() {
 }
 
 void GameWorldScreen::redraw() {
-    const Uint32 t0 = SDL_GetTicks();
+    const Uint32 t0 = TnC_GetTicksMs();
 
     if (mapFlag_) {
         mapi_->get_map(locX_, locY_, zone_, sol_, decor_);
         mapFlag_ = false;
     }
 
-    SDL_FillRect(screen_, nullptr, 0xFF000000);
+    TnC_FillArgb(screen_, nullptr, 0xFF000000);
     SDL_BlitSurface(sol_, nullptr, screen_, nullptr);
     SDL_BlitSurface(decor_, nullptr, screen_, nullptr);
     npcm_->draw_npc(screen_, static_cast<int>(locX_), static_cast<int>(locY_));
@@ -385,8 +402,15 @@ void GameWorldScreen::redraw() {
 
     char charloc[128];
 #if defined(LINUX_PORT)
-    snprintf(charloc, sizeof(charloc), "Joueur %u,%u | vue %u,%u Z%u | lum %.2f | FPS %.0f", playerX_, playerY_,
-             locX_, locY_, zone_, presenter_.brightnessScale(), fps_);
+    T4CActivePlayer active{};
+    T4CLoginSessionGetActivePlayer(&active);
+    if (active.valid && !active.name.empty()) {
+        snprintf(charloc, sizeof(charloc), "%s niv %u | %u,%u Z%u | lum %.2f | FPS %.0f", active.name.c_str(),
+                 static_cast<unsigned>(active.level), playerX_, playerY_, zone_, presenter_.brightnessScale(), fps_);
+    } else {
+        snprintf(charloc, sizeof(charloc), "Joueur %u,%u | vue %u,%u Z%u | lum %.2f | FPS %.0f", playerX_, playerY_,
+                 locX_, locY_, zone_, presenter_.brightnessScale(), fps_);
+    }
 #else
     snprintf(charloc, sizeof(charloc), "Loc %u,%u Z%u | FPS %.0f", locX_, locY_, zone_, fps_);
 #endif
@@ -395,19 +419,26 @@ void GameWorldScreen::redraw() {
         SDL_DestroySurface(txt_loc);
     }
 
+    if (sideMenu_.isOpen()) {
+        sideMenu_.draw(screen_);
+    }
+    if (optionsPopupOpen_) {
+        drawOptionsPopup();
+    }
+
     if (dispInfos_) {
         char infos[256];
         snprintf(infos, sizeof(infos), "T4C_DATA=%s\nFleches=perso F4/F5=luminosite F12=capture", dataRoot_.c_str());
         if (SDL_Surface *srf_infos = fm_->get_text(infos)) {
             SDL_Rect txtpos{60, 20, static_cast<int>(srf_infos->w), static_cast<int>(srf_infos->h)};
-            SDL_FillRect(screen_, &txtpos, 0x758F75AA);
+            TnC_FillArgb(screen_, &txtpos, 0x758F75AA);
             SDL_BlitSurface(srf_infos, nullptr, screen_, &txtpos);
             SDL_DestroySurface(srf_infos);
         }
     }
 
     presenter_.present(screen_, kLogicalWidth, kLogicalHeight);
-    fps_ = 1000.f / static_cast<float>(SDL_GetTicks() - t0 + 1);
+    fps_ = 1000.f / static_cast<float>(TnC_GetTicksMs() - t0 + 1);
 }
 
 void GameWorldScreen::Update() {
@@ -457,6 +488,123 @@ bool GameWorldScreen::ConsumeReturnToLogin() {
     return std::exchange(returnToLogin_, false);
 }
 
+bool GameWorldScreen::ConsumeQuitApp() {
+    return std::exchange(quitApp_, false);
+}
+
+void GameWorldScreen::drawOptionsPopup() {
+    SDL_Rect panel{620, 320, 560, 280};
+    TnC_FillArgb(screen_, &panel, 0xC0182030);
+
+    const int x = panel.x + 32;
+    int y = panel.y + 20;
+    blitText(fm_, screen_, x, y, "Options", 0xFFE8D080);
+    y += 36;
+
+    static const char *kItems[] = {"Annuler", "Retour au login", "Quitter le jeu"};
+    for (int i = 0; i < 3; ++i) {
+        char line[64];
+        snprintf(line, sizeof(line), "%s %s", optionsSelection_ == i ? ">" : " ", kItems[i]);
+        blitText(fm_, screen_, x + 16, y, line, optionsSelection_ == i ? 0xFF80FF80 : 0xFFCCCCCC);
+        y += 28;
+    }
+}
+
+bool GameWorldScreen::handleOptionsPopupKey(const SDL_Event &event) {
+    if (!event.key.down || event.key.repeat) {
+        return true;
+    }
+
+    if (keyPressed(event, SDLK_ESCAPE, SDL_SCANCODE_ESCAPE)) {
+        optionsPopupOpen_ = false;
+        optionsSelection_ = 0;
+        return true;
+    }
+
+    if (keyPressed(event, SDLK_UP, SDL_SCANCODE_UP)) {
+        optionsSelection_ = (optionsSelection_ + 2) % 3;
+        return true;
+    }
+    if (keyPressed(event, SDLK_DOWN, SDL_SCANCODE_DOWN)) {
+        optionsSelection_ = (optionsSelection_ + 1) % 3;
+        return true;
+    }
+
+    if (!keyPressed(event, SDLK_RETURN, SDL_SCANCODE_RETURN) &&
+        !keyPressed(event, SDLK_KP_ENTER, SDL_SCANCODE_KP_ENTER)) {
+        return true;
+    }
+
+    switch (optionsSelection_) {
+        case 0:
+            optionsPopupOpen_ = false;
+            optionsSelection_ = 0;
+            break;
+        case 1:
+            optionsPopupOpen_ = false;
+            sideMenu_.setOpen(false);
+            returnToLogin_ = true;
+            break;
+        case 2:
+            optionsPopupOpen_ = false;
+            sideMenu_.setOpen(false);
+            quitApp_ = true;
+            break;
+        default:
+            break;
+    }
+    return true;
+}
+
+bool GameWorldScreen::handleSideMenuKey(const SDL_Event &event) {
+    if (!event.key.down || event.key.repeat) {
+        return true;
+    }
+
+    if (keyPressed(event, SDLK_ESCAPE, SDL_SCANCODE_ESCAPE)) {
+        sideMenu_.setOpen(false);
+        return true;
+    }
+    return true;
+}
+
+bool GameWorldScreen::handleSideMenuMouse(const SDL_Event &event) {
+    SDL_Event ev = event;
+    if (renderer_) {
+        SDL_ConvertEventToRenderCoordinates(renderer_, &ev);
+    }
+
+    int mx = 0;
+    int my = 0;
+    if (event.type == SDL_EVENT_MOUSE_MOTION) {
+        mx = static_cast<int>(ev.motion.x);
+        my = static_cast<int>(ev.motion.y);
+        sideMenu_.handleMouse(mx, my, false, false);
+        return true;
+    }
+
+    mx = static_cast<int>(ev.button.x);
+    my = static_cast<int>(ev.button.y);
+    const bool leftDown = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_LEFT;
+    const bool leftUp = event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT;
+
+    if (!leftDown && !leftUp) {
+        return true;
+    }
+
+    const WorldSideMenu::Action action = sideMenu_.handleMouse(mx, my, leftDown, leftUp);
+    if (action == WorldSideMenu::Action::OpenOptions) {
+        optionsPopupOpen_ = true;
+        optionsSelection_ = 0;
+        return true;
+    }
+    if (action == WorldSideMenu::Action::PanelNotImplemented) {
+        SDL_Log("[GameWorld] panneau SideMenu non implemente (placeholder).");
+        return true;
+    }
+    return true;
+}
+
 bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
     if (!ready_) {
         return true;
@@ -464,6 +612,17 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
     if (event.type == SDL_EVENT_QUIT) {
         return true;
     }
+
+    if (event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+        event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+        if (optionsPopupOpen_) {
+            return true;
+        }
+        if (sideMenu_.isOpen()) {
+            return handleSideMenuMouse(event);
+        }
+    }
+
     if (event.type == SDL_EVENT_KEY_UP) {
         switch (event.key.key) {
             case SDLK_LEFT:
@@ -490,6 +649,14 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
         return true;
     }
 
+    if (optionsPopupOpen_) {
+        return handleOptionsPopupKey(event);
+    }
+
+    if (sideMenu_.isOpen()) {
+        return handleSideMenuKey(event);
+    }
+
     if (keyPressed(event, SDLK_F4, SDL_SCANCODE_F4)) {
         float b = presenter_.brightnessScale() - 0.1f;
         clampBrightness(b);
@@ -507,7 +674,9 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
 
     switch (event.key.key) {
         case SDLK_ESCAPE:
-            returnToLogin_ = true;
+            sideMenu_.setOpen(true);
+            optionsPopupOpen_ = false;
+            optionsSelection_ = 0;
             return true;
         case SDLK_F1:
             mapi_->set_debug(true);
