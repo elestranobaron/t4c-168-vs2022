@@ -2,13 +2,61 @@
 
 Historique des modifications du client sous `#ifdef LINUX_PORT` et de la documentation associée.
 
-> **Convention :** chaque entrée significative est horodatée **`YYYY-MM-DD HH:MM:SS`** (logs réseau, tests utilisateur ou fin de patch).
+> **Convention :** chaque entrée significative est horodatée **`YYYY-MM-DD HH:MM:SS`** (logs réseau, tests utilisateur ou fin de patch). Chaque ajout futur indique sa **famille fonctionnelle** (voir ci-dessous).
 
 ---
 
-## BACKLOG — Pipeline WDA, skips serveur, assets *(documenté 2026-05-20 — à revoir plus tard)*
+## FAMILLES FONCTIONNELLES — taxonomie port *(2026-05-25)*
 
-> **Statut :** non terminé, **pas bloquant** pour le client Linux actuel (login → monde → musique OK avec skips serveur). Cette section centralise ce qu’il reste à faire côté **serveur + outils WDA + politique Git des assets**.
+Référence pour classer tout nouveau travail dans le CHANGELOG (`**Famille : …**` en tête d’entrée ou colonne tableau).
+
+| Famille | Contenu | Rendu / couche client | Opcodes / serveur typiques | Statut Linux |
+|---------|---------|------------------------|----------------------------|--------------|
+| **Carte / tuiles** | Sol, murs, décor **statique** `.map` | `MapInterface` → `sol_` / `decor_` | Données locales `$T4C_DATA/maps/` | ✓ |
+| **Unités réseau** | Joueur, autres PCs, mobs, PNJ **sprite** (app ≥ 10005 ou 20xxx) | `NPCManager` (sdl3_test) | **1**, **16**, **10004**, **69**, **70** | ✓ partiel (2026-05-25) |
+| **Objets au sol** | Portes, coffres, leviers, triggers, objets posés WDA (apparences objet, typ. sous 10001) | *À faire* — équivalent Windows `VisualObjectList` / `Objects.Add`, **pas** `NPCManager` | **16** (`TFCAddObject`), **10004** objet ; serveur `WDAInitObjects` / `create_world_unit` | ✗ client |
+| **Perso / ODBC** | Stats, inventaire, coffre banque, skills, sorts, **position déco** | HUD + logique serveur | **13**, **43**, **33**, **37**, **44**, **67**, `load_character` | partiel (HUD PV/mana/XP ✓ 2026-05-19) |
+| **Combat / loot** | Attaques, dégâts, mort, butin | Anim + HUD | divers `packethandling.cpp` | ✗ |
+| **PNJ scriptés** | Dialogues, quêtes, marchands | UI + scripts serveur | `NPCs.WDA`, interaction clic | ✗ |
+| **UI / social** | Chat, menus, MOTD, options | overlays launcher / monde | **65**, **66**, **131**, … | ✗ |
+| **Audio** | Musique zone, SFX | `T4CGameMusic` / futur SFX | 100 % client (+ coords opcode **1** / **57**) | musique ✓ ; SFX ✗ |
+| **Infra / WDA / build** | Skips, LP64, perf boot, commits outils | — | serveur + scripts Python | en cours |
+
+**Rappel utilisateur :** les **portes interactives** (apparition, animation ouverture) = famille **Objets au sol**, pas « unités réseau » ni « carte tuiles » seules.
+
+**Déjà documenté sous cette famille :** opcode **16** filtré aujourd’hui par `IsRemoteDrawableUnit` → les objets sol (dont portes) sont **ignorés** volontairement jusqu’à l’étape dédiée.
+
+---
+
+## POLITIQUE MOTEUR — une seule source de vérité *(2026-05-25)*
+
+| Dépôt / dossier | Rôle | Modifier ? |
+|-----------------|------|------------|
+| **`client_graphical_sdl3_test/TnC_dev/`** | **Moteur TnC compilé** dans `t4c_client` (SDL3 natif, patches gameplay) | **Oui** — seul endroit pour le code moteur |
+| **`client_graphical_path_to_follow/decode/TnC_dev/`** | **Flacon témoin** mestoph / labo offline (référence historique) | **Non** — ne pas patcher ; `git checkout` pour restaurer |
+| **`finalstep/client/`** | Client Linux (`T4CLoginSession`, `GameWorldScreen`, CMake) | Oui — appelle le moteur via `cmake/TncGraphical.cmake` |
+
+**CMake (`TncGraphical.cmake`)** : priorité **1** = `../client_graphical_sdl3_test/TnC_dev` ; fallback **2** = path_to_follow **uniquement** si sdl3_test absent.
+
+**Autonomie sdl3_test (2026-05-21)** : les 9 symlinks `TnC_dev/` → path_to_follow ont été remplacés par des **copies réelles** (`FontManager`, `VSFInterface`, `NPCManager`, `TextManager`, `fonts`, `NPCList.txt`, assets). Plus aucune dépendance symlink au témoin pour compiler.
+
+**Modifs moteur session réseau / monde (sdl3_test, pas path_to_follow) — `NPCManager` :**
+
+| API | Rôle |
+|-----|------|
+| `move_to(..., steps_mul)` | Glide visuel ; `steps_mul` ralentit durée **et** pas/frame |
+| `is_moving(id)` | Bloque enchaînement de pas tant que l'anim tourne |
+| `set_world_pos(id, x, y)` | Snap immédiat (sync serveur / téléport) |
+| `set_npc_type(id, nom)` | Changement sprite (opcode 69 apparence) |
+| `remove_npc(id)` | Despawn unité distante ; **refuse id 0** (joueur local) |
+
+Autres modules sdl3_test déjà portés SDL3 (hors diff path_to_follow) : `MapInterface/`, `VSFInterface/`, `FontManager/`, `TextManager/`, `include/tnc_sdl3.h`, `render/`.
+
+---
+
+## BACKLOG — Pipeline WDA, assets *(documenté 2026-05-20 — mis à jour 2026-05-25)*
+
+> **Statut :** boot serveur **sans skips** validé en jeu (**2026-05-25 23:03:07** — mobs, move). Reste surtout **perf boot WDA**, **commit outils LP64**, **parité perso ODBC** (coffre/skills/sorts).
 
 ### État du pipeline WDA (résumé)
 
@@ -24,29 +72,51 @@ Historique des modifications du client sous `#ifdef LINUX_PORT` et de la documen
 
 ---
 
-### Skips serveur actuels (`tools/debug/t4c_env.sh`)
+### Skips WDA serveur — retirés du boot par défaut (2026-05-25)
 
-Boot dev validé avec :
+**État actuel :** `T4C_Server_Linux_Final_Step/tools/debug/t4c_env.sh` — les deux `export T4C_SKIP_*` sont **commentés** (plus actifs au lancement normal).
 
-```bash
-export T4C_SKIP_GROUND_OBJECTS=1
-export T4C_SKIP_CREATURES=1
+| Variable | Rôle historique | Statut **2026-05-25** |
+|----------|-----------------|------------------------|
+| **`T4C_SKIP_GROUND_OBJECTS`** | Sauter ~2601 objets posés (étape 2) | **Retiré** — fix `WorldMap::SetBlockingUnit` (boucle Y) |
+| **`T4C_SKIP_CREATURES`** | Sauter lecture/init creatures (étapes 3–4) | **Retiré** — boot + mobs en jeu (`0x4E26` opcode 1) |
+
+**Code serveur :** le mécanisme `getenv("T4C_SKIP_*")` reste dans `TFCInit.cpp` / `WDACreatures.cpp` comme **bypass dev optionnel** (décommenter dans `t4c_env.sh` pour diagnostiquer une phase). **À faire plus tard :** supprimer ce code mort une fois le boot LP64 stable partout.
+
+**Boot complet attendu (sans variables) :**
+
+```text
+1. Objets WDA (définitions)          ✓
+2. WDAInitObjects (~2601 au sol)     ✓ (fix WorldMap)
+3–4. Creatures + WDAInitCreatures    ✓ (validation 23:03:07)
+5. WDAInitNPC (NPCs.WDA)             fix trailer appliqué — boot `[WDAInit] WDAInitNPC done` si WDA Havoc/LP64 OK
+6–8. Hives / area links / clans      ✓
+→ Server started
 ```
 
-| Variable | Ce qu’elle saute | Ce qui reste chargé | Cause racine | Fix attendu |
-|----------|------------------|---------------------|--------------|-------------|
-| **`T4C_SKIP_GROUND_OBJECTS`** | ~2601 appels `create_world_unit` (objets **posés** sur les cartes) | Définitions d’objets (stats, formules) | Blocage spawn (obj. **106** @ 1601,2569) — boucle / `ViewFlag(BLOCKING)` / mutex `WorldMap` | **C++ serveur** (`WorldMap::create_world_unit`, garde-fou `SetBlockingUnit` partiel) — **pas un script Python** |
-| **`T4C_SKIP_CREATURES`** | Lecture + init section **creatures** WDA | Hives, area links, clans (via `SkipSection` + seek offsets) | **Perf** (`WDAFile::Read` octet par octet) + alignement LP64 section creatures | Étendre `patch_wda_lp64` / `verify_lp64_*` **ou** lire certains champs en `DWORD` côté serveur + optim `fread` blocs dans `WDAFile.cpp` |
+Le boot peut rester **lent** (1–3 min sur objets/creatures) : `WDAFile::Read` lit encore **octet par octet** (`fgetc`) — voir § « Reste ouvert » ci-dessous.
 
-**Important :** les skips **ne réparent pas** le WDA — ils **contournent** pour booter. Retirer les skips = objectif prod.
+---
 
-**Ordre de travail recommandé (serveur) :**
+### Skips WDA — référence historique (contournements 2026-05-18)
 
-1. WDA LP64 stable (Worlds + Edit) — patch ou fix `lCharges` DWORD côté C++
-2. Perf `WDAFile::Read` (fread + déchiffrement par blocs)
-3. Retirer `T4C_SKIP_GROUND_OBJECTS` → debug `create_world_unit`
-4. Retirer `T4C_SKIP_CREATURES` → `CreateFrom` + `WDAInitCreatures` complets
-5. NPCs (voir ci-dessous)
+<details>
+<summary>Ancien tableau skips (archivé)</summary>
+
+| Variable | Ce qu’elle sautait | Cause racine d’origine |
+|----------|-------------------|------------------------|
+| **`T4C_SKIP_GROUND_OBJECTS`** | ~2601 `create_world_unit` | Boucle Y `SetBlockingUnit` + obj. **106** @ 1601,2569 |
+| **`T4C_SKIP_CREATURES`** | Section creatures WDA | Perf `fgetc` + alignement LP64 |
+
+</details>
+
+**Ordre de travail restant (serveur) :**
+
+1. ~~Retirer skips boot~~ — **fait** (mai 2026)
+2. Perf `WDAFile::Read` (`fread` par blocs) — confort boot, pas bloquant fonctionnel
+3. Commit / doc pipeline LP64 (`second_approach/`, specs txt)
+4. `load_character` **chemin long** Linux (coffre, skills, sorts) — **position déco + inventaire déjà chargés**
+5. Retirer le code `getenv(T4C_SKIP_*)` quand plus utile
 
 ---
 
@@ -106,11 +176,37 @@ Ne **pas** mélanger IP Vircom (`.WDA`, dumps txt données, `data/`) et code GPL
 - [ ] Commit `key_swaps/` (scripts Python, sans `output/*.WDA`)
 - [ ] Commit `scripts/assemble_t4c_data.sh` + `data/README.md` (sans binaires `sprites/`/`maps/`/`sons/`)
 - [ ] `data/MANIFEST.md` ou script `verify_t4c_data.sh` (optionnel)
-- [ ] Synchroniser avec fix serveur quand skips retirés
+- [x] ~~Synchroniser avec fix serveur quand skips retirés~~ — **2026-05-25** (boot sans skips, validation en jeu)
+
+---
+
+## 2026-05-19 — HUD stats perso (opcode 43 / 33 / 37 / 44 / 67)
+
+**Famille :** **Perso / ODBC**.
+
+### 2026-05-19 — Réception stats combat + barres PV / mana / XP
+
+| Opcode | Rôle client |
+|--------|-------------|
+| **43** | Parse `Character::PacketStatus` (aligné `Packet.cpp`) — HP, mana, niveau, XP, stats, poids |
+| **33** | Mise à jour PV (`HP` + `MaxHP` si présent) |
+| **37** | Level-up — niveau, seuil XP suivant, PV/mana remontés |
+| **44** | Mise à jour XP totale |
+| **67** | Mise à jour mana courante |
+
+**Rendu :** barres PV (rouge) et mana (bleu) + ligne XP sous la ligne debug en haut à gauche.
+
+**Entrée monde :** si opcode **43** pas encore reçu à l'`Init` de `GameWorldScreen`, envoi `RequestPlayerStatus()` (fallback).
+
+**API :** `T4CPlayerStatus`, `GetPlayerStatus`, `ConsumePlayerStatusUpdate`, `RequestPlayerStatus`.
+
+**Fichiers :** `T4CLoginSession.{cpp,h}`, `GameWorldScreen.cpp`.
 
 ---
 
 ## 2026-05-25 — Unités distantes + déplacement serveur-autoritaire
+
+**Famille :** **Unités réseau** (+ **Perso / ODBC** pour move joueur local).
 
 ### 2026-05-25 23:03:07 — Validation utilisateur (*« tout est rentré dans l'ordre »*)
 
@@ -148,6 +244,12 @@ Test LH avec creatures WDA actives côté serveur :
 | **2026-05-25** (session) | Opcode **1** ré-apprenait `unitId` depuis n'importe quel PC | Filtre apparence PC strict ; pas de ré-apprentissage depuis mobs |
 | **2026-05-25** (session) | Déplacement optimiste → murs / téléports | `tryMovePlayer` envoie opcode 1–8 sans avance locale ; ack via `applyServerPlayerPosition` |
 | **2026-05-25 22:52:10** | Perso figé après fix ci-dessus | Ré-apprentissage `unitId` adjacent (voir entrée **23:03:07**) |
+
+---
+
+### 2026-05-25 (session) — Boot serveur sans skips
+
+Aligné CHANGELOG serveur : skips commentés dans `t4c_env.sh`, mécanisme `getenv` conservé en code pour debug futur.
 
 ---
 
@@ -346,8 +448,8 @@ Ce n’est pas une réparation automatique : c’est un **contournement** (ignor
 |---|--------------------------------|-------------------------|
 | Fichier | `T4C Worlds.WDA` / `T4C Edit.WDA` | `NPCs.WDA` |
 | Contenu | Stats mobs, apparences 20xxx (brigand 20006…) | Scripts PNJ (INTL, quêtes, marchands) |
-| Skip / erreur | `T4C_SKIP_CREATURES` | **try/catch** — boot continue, NPCs non chargés |
-| État actuel | OK si skip retiré + LP64 | **Fix parseur appliqué — à valider en boot** |
+| Skip / erreur | ~~`T4C_SKIP_CREATURES`~~ retiré du boot | Fix trailer **2026-05-21** — valider `[WDAInit] WDAInitNPC done` |
+| État actuel **2026-05-25** | Boot sans skip, mobs visibles client | NPCs scriptés si parseur + WDA OK ; try/catch si échec |
 
 ---
 
@@ -417,7 +519,9 @@ Lecture **octet par octet BE** (`ReadBeUint16`, `ReadBeInt32Msf`) — **pas** de
 
 #### 2026-05-21 — Moteur : `client_graphical_sdl3_test` autonome (fin des symlinks)
 
-Les 9 symlinks `TnC_dev/` → `client_graphical_path_to_follow` ont été remplacés par des **copies réelles** dans `client_graphical_sdl3_test/TnC_dev/` (`FontManager`, `VSFInterface`, `NPCManager`, `TextManager`, `fonts`, assets). Le moteur SDL3 patché (dont `remove_npc`) vit désormais **uniquement** dans sdl3_test. `client_graphical_path_to_follow` a été **restauré** (`git checkout`) en état témoin vierge.
+> **Rappel permanent :** voir section **[POLITIQUE MOTEUR](#politique-moteur--une-seule-source-de-vérité-2026-05-25)** en tête de ce CHANGELOG.
+
+Les 9 symlinks `TnC_dev/` → `client_graphical_path_to_follow` ont été remplacés par des **copies réelles** dans `client_graphical_sdl3_test/TnC_dev/`. Le moteur SDL3 patché vit **uniquement** dans sdl3_test. `client_graphical_path_to_follow` = **flacon témoin** (`git checkout`, ne pas modifier).
 
 #### Fix regression déplacement / téléport
 
@@ -1188,8 +1292,8 @@ Voir section **2026-05-20** ci-dessus. Avant ce commit : pas de handler 57, pas 
 | **Vitesse marche / jambes** | Animation marche toujours pilotée par `ANIM_FPS` (15) dans `npc_draw.cpp`, indépendante de `move_to` ; déplacement perçu encore rapide si le serveur **snap** sur opcode 1 (`snapPlayerVisual` → `set_world_pos` annule le glide). Réglage fin : `kMoveVisualStepsMul`, éventuellement ne pas snap si ack = position prédite (sans bloquer le jeu). |
 | **Carte** | `get_map` → `full_redraw` à chaque pas caméra (pas de scroll `move_map`) — saccades possibles. |
 | **Collision** | Autorité serveur (WDA) ; pas d’affichage client du refus de move (opcode 1 sans déplacement). |
-| **Autres joueurs / PNJ** | Pas de rendu des unités réseau (opcode **69** `UnitUpdate`, etc.). |
-| **Objets sol** | Opcode **16** (peripheric objects) non géré à l’écran. |
+| **Autres joueurs / mobs** | Rendu basique **fait** (opcodes 1/16/10004/69/70 — **2026-05-25**) ; polish animation / table apparences incomplète |
+| **Objets au sol** | Portes, coffres, leviers, drops posés (famille dédiée — voir [FAMILLES](#familles-fonctionnelles--taxonomie-port-2026-05-25)) ; opcode **16** côté client non géré à l’écran |
 | **Musique / SFX** | **Musique zone** ✓ (`T4CGameMusic`) ; SFX combat/UI **non portés** |
 | **Opcodes monde** | Beaucoup de paquets post-46 seulement **logués** (**43** stats, **60** near units, **131**, chat, combat, loot, UI…) — voir `CLIENT168_RC14h_OK/.../packethandling.cpp`. |
 | **WDA côté client** | **Hors scope** — le client ne lit jamais les `.WDA`. |
@@ -1200,10 +1304,13 @@ Voir section **2026-05-20** ci-dessus. Avant ce commit : pas de handler 57, pas 
 
 #### Serveur (`T4C_Server_Linux_Final_Step`, hors dépôt client)
 
-→ **Détail complet : section [BACKLOG — Pipeline WDA](#backlog--pipeline-wda-skips-serveur-assets-documenté-2026-05-20--à-revoir-plus-tard)** en tête de ce CHANGELOG.
+→ **Détail : section [BACKLOG — Pipeline WDA](#backlog--pipeline-wda-assets-documenté-2026-05-20--mis-à-jour-2026-05-25)**.
 
-- [ ] **Démarrer sans workarounds de boot** : retirer `T4C_SKIP_GROUND_OBJECTS` / `T4C_SKIP_CREATURES` (voir BACKLOG).
-- [ ] Valider **WDA Worlds + Edit + NPCs** LP64 + perf `WDAFile`.
+- [x] ~~Boot sans `T4C_SKIP_*`~~ — **2026-05-25** (`t4c_env.sh` commenté ; validation mobs + move client)
+- [ ] **Perf boot** : `WDAFile::Read` — passer de `fgetc` (1–3 min) à `fread` par blocs (confort, pas bloquant)
+- [ ] **Pipeline LP64** : commit scripts/specs `second_approach/` + doc MD5 WDA `build/WDA/` (outils client, pas le binaire)
+- [ ] **`load_character` chemin long Linux** : réactiver coffre + skills + sorts (**position déco + inventaire déjà OK** — voir CHANGELOG serveur)
+- [ ] Retirer définitivement le code `getenv(T4C_SKIP_*)` côté serveur
 
 #### Client — réseau (`T4CLoginSession`)
 
@@ -1213,7 +1320,7 @@ Voir section **2026-05-20** ci-dessus. Avant ce commit : pas de handler 57, pas 
   - **43** — stats / HUD joueur
   - **60** — unités proches (compléter au-delà du log)
   - **69** — `UnitUpdate` (autres entités visibles)
-  - **16** — objets au sol autour du joueur
+  - **16** — **Objets au sol** (portes, coffres, … — extension au-delà des unités déjà filtrées)
   - **131** et flux déjà reçus en rafale après 46 — identifier et classer
 - [ ] Ne pas spammer les moves : respecter le rythme ~50 ms / round serveur ; file d’inputs si besoin.
 - [ ] Snap serveur opcode **1** : corriger sans bloquer (ex. ignorer snap si coords = position déjà envoyée **pendant** le glide).
@@ -1246,5 +1353,5 @@ Voir section **2026-05-20** ci-dessus. Avant ce commit : pas de handler 57, pas 
 | Réseau | `src/network/T4CLoginSession.cpp`, `.h` |
 | Présentation | `third_party/tnc_sdl3/render/Sdl3FramePresenter.cpp`, `.h`, `tnc_sdl2_compat.h` |
 | Build | `CMakeLists.txt`, `cmake/TncGraphical.cmake` |
-| TnC embarqué | `client_graphical_sdl3_test/TnC_dev/NPCManager/*`, (miroir `client_graphical_path_to_follow/decode/TnC_dev/`) |
+| TnC embarqué | **`client_graphical_sdl3_test/TnC_dev/`** uniquement (path_to_follow = témoin, non compilé) |
 | App | `src/main.cpp` |

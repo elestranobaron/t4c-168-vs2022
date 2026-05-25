@@ -101,6 +101,9 @@ static constexpr std::uint16_t kTfcPacketPopup = 10004;
 
 static T4CActivePlayer g_activePlayer{};
 static std::mutex g_activePlayerMutex;
+static T4CPlayerStatus g_playerStatus{};
+static std::mutex g_playerStatusMutex;
+static std::atomic<bool> g_playerStatusPending{false};
 /** Classe derivee du questionnaire (opcode 25), cle = nom perso. */
 static std::unordered_map<std::string, std::uint8_t> g_characterClassByName;
 static std::atomic<bool> g_playerPopupPending{false};
@@ -197,6 +200,15 @@ static std::int32_t ReadBeInt32Msf(const unsigned char *d, int off, int len) {
                             (static_cast<std::uint32_t>(d[off + 2]) << 8) |
                             static_cast<std::uint32_t>(d[off + 3]);
     return static_cast<std::int32_t>(u);
+}
+
+static std::uint64_t ReadBeInt64Msf(const unsigned char *d, int off, int len) {
+    if (!d || off + 8 > len) {
+        return 0;
+    }
+    const std::uint64_t hi = static_cast<std::uint64_t>(static_cast<std::uint32_t>(ReadBeInt32Msf(d, off, len)));
+    const std::uint64_t lo = static_cast<std::uint64_t>(static_cast<std::uint32_t>(ReadBeInt32Msf(d, off + 4, len)));
+    return (hi << 32) | lo;
 }
 
 static std::uint16_t ReadBeUint16(const unsigned char *d, int off, int len) {
@@ -513,6 +525,11 @@ static void ResetInGameClientStateAfterForcedExit() {
         std::lock_guard<std::mutex> lock(g_activePlayerMutex);
         g_activePlayer = {};
     }
+    {
+        std::lock_guard<std::mutex> lock(g_playerStatusMutex);
+        g_playerStatus = {};
+    }
+    g_playerStatusPending.store(false);
 }
 
 static void SendExitGameLocked() {
@@ -698,6 +715,170 @@ static bool ParseRolledStatsPayload(const unsigned char *data, int len, int off,
     out->mana = ReadBeUint16(data, off, len);
     out->valid = true;
     return true;
+}
+
+/** Character::PacketStatus — corps apres en-tete TFC 6 octets (Packet.cpp RQ_GetStatus). */
+static constexpr int kGetStatusMinLen = 62;
+
+static bool ParseGetStatusPayload(const unsigned char *data, int len, T4CPlayerStatus *out) {
+    constexpr int kOff = 6;
+    if (!data || !out || len < kOff + kGetStatusMinLen) {
+        return false;
+    }
+    int o = kOff;
+    const auto readU32 = [&](unsigned int &dst) -> bool {
+        if (o + 4 > len) {
+            return false;
+        }
+        const std::int32_t v = ReadBeInt32Msf(data, o, len);
+        o += 4;
+        dst = v < 0 ? 0u : static_cast<unsigned>(v);
+        return true;
+    };
+    const auto readU16 = [&](std::uint16_t &dst) -> bool {
+        if (o + 2 > len) {
+            return false;
+        }
+        dst = ReadBeUint16(data, o, len);
+        o += 2;
+        return true;
+    };
+    if (!readU32(out->hp) || !readU32(out->maxHp) || !readU16(out->mana) || !readU16(out->maxMana)) {
+        return false;
+    }
+    if (o + 8 <= len) {
+        out->xp = ReadBeInt64Msf(data, o, len);
+    }
+    o += 8;
+    o += 2; /* bAC */
+    if (!readU16(out->ac)) {
+        return false;
+    }
+    o += 14; /* base stats bStr..bLck (7 x short) */
+    o += 2;  /* stat points */
+    if (!readU16(out->str) || !readU16(out->end) || !readU16(out->agi)) {
+        return false;
+    }
+    o += 2; /* wil */
+    if (!readU16(out->wis) || !readU16(out->intel)) {
+        return false;
+    }
+    o += 2; /* lck */
+    if (!readU16(out->level)) {
+        return false;
+    }
+    if (len >= o + 4) {
+        o += 2; /* skill points */
+        readU16(out->weight);
+        readU16(out->maxWeight);
+    }
+    out->valid = true;
+    return true;
+}
+
+static void MarkPlayerStatusUpdated(const T4CPlayerStatus &st) {
+    {
+        std::lock_guard<std::mutex> lock(g_playerStatusMutex);
+        g_playerStatus = st;
+    }
+    g_playerStatusPending.store(true);
+    if (st.level != 0) {
+        std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+        if (g_activePlayer.valid) {
+            g_activePlayer.level = st.level;
+        }
+    }
+}
+
+static void HandleGetStatus(const unsigned char *data, int len) {
+    T4CPlayerStatus st{};
+    if (!ParseGetStatusPayload(data, len, &st)) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
+                               "[PHASE] RQ_GetStatus (43) tronque (%d octets) — HUD stats ignorees.", len);
+        return;
+    }
+    MarkPlayerStatusUpdated(st);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_GetStatus (43) — niv %u PV %u/%u mana %u/%u AC %u XP %llu.",
+                           static_cast<unsigned>(st.level), st.hp, st.maxHp, static_cast<unsigned>(st.mana),
+                           static_cast<unsigned>(st.maxMana), static_cast<unsigned>(st.ac),
+                           static_cast<unsigned long long>(st.xp));
+}
+
+static void HandleXPchanged(const unsigned char *data, int len) {
+    if (len < 14) {
+        return;
+    }
+    T4CPlayerStatus st{};
+    {
+        std::lock_guard<std::mutex> lock(g_playerStatusMutex);
+        st = g_playerStatus;
+    }
+    st.xp = ReadBeInt64Msf(data, 6, len);
+    st.valid = true;
+    MarkPlayerStatusUpdated(st);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] RQ_XPchanged (44) — XP %llu.",
+                           static_cast<unsigned long long>(st.xp));
+}
+
+static void HandleLevelUp(const unsigned char *data, int len) {
+    if (len < 30) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
+                               "[PHASE] RQ_LevelUp (37) tronque (%d octets).", len);
+        return;
+    }
+    T4CPlayerStatus st{};
+    {
+        std::lock_guard<std::mutex> lock(g_playerStatusMutex);
+        st = g_playerStatus;
+    }
+    st.level = ReadBeUint16(data, 6, len);
+    st.xpToNextLevel = ReadBeInt64Msf(data, 10, len);
+    const std::int32_t hp = ReadBeInt32Msf(data, 18, len);
+    const std::int32_t maxHp = ReadBeInt32Msf(data, 22, len);
+    st.hp = hp < 0 ? 0u : static_cast<unsigned>(hp);
+    st.maxHp = maxHp < 0 ? 0u : static_cast<unsigned>(maxHp);
+    st.mana = ReadBeUint16(data, 26, len);
+    st.maxMana = ReadBeUint16(data, 28, len);
+    st.valid = true;
+    MarkPlayerStatusUpdated(st);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_LevelUp (37) — niv %u PV %u/%u mana %u/%u XP next %llu.",
+                           static_cast<unsigned>(st.level), st.hp, st.maxHp, static_cast<unsigned>(st.mana),
+                           static_cast<unsigned>(st.maxMana), static_cast<unsigned long long>(st.xpToNextLevel));
+}
+
+static void HandleHPchanged(const unsigned char *data, int len) {
+    if (len < 10) {
+        return;
+    }
+    const std::int32_t hp = ReadBeInt32Msf(data, 6, len);
+    T4CPlayerStatus st{};
+    {
+        std::lock_guard<std::mutex> lock(g_playerStatusMutex);
+        st = g_playerStatus;
+    }
+    st.hp = hp < 0 ? 0u : static_cast<unsigned>(hp);
+    if (len >= 14) {
+        const std::int32_t maxHp = ReadBeInt32Msf(data, 10, len);
+        st.maxHp = maxHp < 0 ? 0u : static_cast<unsigned>(maxHp);
+    }
+    st.valid = true;
+    MarkPlayerStatusUpdated(st);
+}
+
+static void HandleManaChanged(const unsigned char *data, int len) {
+    if (len < 8) {
+        return;
+    }
+    T4CPlayerStatus st{};
+    {
+        std::lock_guard<std::mutex> lock(g_playerStatusMutex);
+        st = g_playerStatus;
+    }
+    st.mana = ReadBeUint16(data, 6, len);
+    st.valid = true;
+    MarkPlayerStatusUpdated(st);
 }
 
 static void StoreRolledStatsFromPacket(const unsigned char *data, int len, int statsOffset) {
@@ -1627,8 +1808,12 @@ static const char *OpcodeLabel(std::uint16_t op) {
             return "RQ_HPchanged";
         case RQ_ManaChanged:
             return "RQ_ManaChanged";
+        case RQ_GetStatus:
+            return "RQ_GetStatus";
         case RQ_LevelUp:
             return "RQ_LevelUp";
+        case RQ_XPchanged:
+            return "RQ_XPchanged";
         default:
             return nullptr;
     }
@@ -1754,6 +1939,20 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
         T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
                                "[PHASE] Reponse RQ_FromPreInGameToInGame (46) code=%d.",
                                resultCode);
+    } else if (op == static_cast<std::uint16_t>(RQ_GetStatus) && g_pipelineStep.load() >= 6) {
+        HandleGetStatus(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_HPchanged) && g_pipelineStep.load() >= 6 &&
+               !g_waitingPutPlayerInGame.load()) {
+        HandleHPchanged(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_ManaChanged) && g_pipelineStep.load() >= 6 &&
+               !g_waitingPutPlayerInGame.load()) {
+        HandleManaChanged(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_XPchanged) && g_pipelineStep.load() >= 6 &&
+               !g_waitingPutPlayerInGame.load()) {
+        HandleXPchanged(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_LevelUp) && g_pipelineStep.load() >= 6 &&
+               !g_waitingPutPlayerInGame.load()) {
+        HandleLevelUp(bytes, nBufferSize);
     } else if (op == kTfcPacketPopup) {
         HandlePacketPopup(bytes, nBufferSize);
     } else if (op == kEventObjectAppearedList && g_pipelineStep.load() >= 6 && g_fromPreInGameResult.load() == 0) {
@@ -2479,6 +2678,33 @@ void T4CLoginSessionGetActivePlayer(T4CActivePlayer *outPlayer) {
     *outPlayer = g_activePlayer;
 }
 
+void T4CLoginSessionGetPlayerStatus(T4CPlayerStatus *outStatus) {
+    if (!outStatus) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_playerStatusMutex);
+    *outStatus = g_playerStatus;
+}
+
+bool T4CLoginSessionConsumePlayerStatusUpdate(T4CPlayerStatus *outStatus) {
+    if (!g_playerStatusPending.exchange(false)) {
+        return false;
+    }
+    T4CLoginSessionGetPlayerStatus(outStatus);
+    return outStatus && outStatus->valid;
+}
+
+bool T4CLoginSessionRequestPlayerStatus() {
+    std::lock_guard<std::mutex> lock(g_sessionMutex);
+    if (!g_comm || g_pipelineStep.load() < 6) {
+        return false;
+    }
+    const auto pkt = BuildOpcodeOnlyPacket(static_cast<std::uint16_t>(RQ_GetStatus));
+    g_comm->SendPacket(g_serverAddr, const_cast<LPBYTE>(pkt.data()), static_cast<int>(pkt.size()), 0, 0);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Envoi RQ_GetStatus (43) — refresh stats HUD.");
+    return true;
+}
+
 bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *outPlayer) {
     if (!g_playerPopupPending.exchange(false)) {
         return false;
@@ -2572,6 +2798,11 @@ void T4CLoginSessionResetAfterReturnToLogin() {
         std::lock_guard<std::mutex> lock(g_activePlayerMutex);
         g_activePlayer = {};
     }
+    {
+        std::lock_guard<std::mutex> lock(g_playerStatusMutex);
+        g_playerStatus = {};
+    }
+    g_playerStatusPending.store(false);
     {
         std::lock_guard<std::mutex> lock(g_characterMutex);
         g_characterList.clear();
@@ -2721,6 +2952,16 @@ bool T4CLoginSessionConsumeEnterWorldReady(T4CEnterWorldSpawn *) {
 }
 
 void T4CLoginSessionGetActivePlayer(T4CActivePlayer *) {}
+
+void T4CLoginSessionGetPlayerStatus(T4CPlayerStatus *) {}
+
+bool T4CLoginSessionConsumePlayerStatusUpdate(T4CPlayerStatus *) {
+    return false;
+}
+
+bool T4CLoginSessionRequestPlayerStatus() {
+    return false;
+}
 
 bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *) {
     return false;

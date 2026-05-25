@@ -17,6 +17,28 @@ struct T4CEnterWorldSpawn {
     bool valid{false};
 };
 
+/** Stats combat / feuille perso (opcode 43 Character::PacketStatus, aligne Packet.cpp RQ_GetStatus). */
+struct T4CPlayerStatus {
+    unsigned int hp{0};
+    unsigned int maxHp{0};
+    unsigned short mana{0};
+    unsigned short maxMana{0};
+    std::uint16_t level{0};
+    unsigned short ac{0};
+    unsigned short str{0};
+    unsigned short end{0};
+    unsigned short agi{0};
+    unsigned short wis{0};
+    unsigned short intel{0};
+    unsigned short weight{0};
+    unsigned short maxWeight{0};
+    /** XP totale (opcode 43 / 44). */
+    std::uint64_t xp{0};
+    /** Seuil XP prochain niveau (opcode 37, Exp2Go Windows). */
+    std::uint64_t xpToNextLevel{0};
+    bool valid{false};
+};
+
 /** Stats affichees apres opcode 25/31 (Character::packet_stats, aligne TFCSocket.cpp). */
 struct T4CCharacterRolledStats {
     unsigned char agi{0};
@@ -37,7 +59,7 @@ struct T4CCharacterRolledStats {
 struct T4CActivePlayer {
     std::string name;
     std::uint16_t race{0};
-    /** Niveau connu (opcode 26 a la selection ; maj future opcode 43). */
+    /** Niveau connu (opcode 26 ; maj opcode 43 / 37). */
     std::uint16_t level{0};
     /** ID apparence serveur (10001–10004 mâle, 15001–15004 femelle, 10011/10012 puppet). */
     std::uint16_t appearance{0};
@@ -157,6 +179,15 @@ bool T4CLoginSessionConsumeEnterWorldReady(T4CEnterWorldSpawn *outSpawn);
 
 /** Copie le perso choisi (race, nom) + dernier PacketPopup 10004 si reçu. */
 void T4CLoginSessionGetActivePlayer(T4CActivePlayer *outPlayer);
+
+/** Dernier opcode 43 / maj partielle 33·67 (thread-safe). */
+void T4CLoginSessionGetPlayerStatus(T4CPlayerStatus *outStatus);
+
+/** True une fois quand HP/mana/stats viennent d'etre mis a jour (opcode 43, 33 ou 67). */
+bool T4CLoginSessionConsumePlayerStatusUpdate(T4CPlayerStatus *outStatus);
+
+/** Demande explicite RQ_GetStatus (43) — refresh cote serveur. */
+bool T4CLoginSessionRequestPlayerStatus();
 
 /** True une fois par nouveau PacketPopup 10004 (position / apparence serveur). */
 bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *outPlayer);

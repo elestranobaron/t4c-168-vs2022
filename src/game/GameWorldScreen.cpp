@@ -45,6 +45,25 @@ void blitText(FontManager *fm, SDL_Surface *dest, int x, int y, const char *text
     }
 }
 
+void drawStatusBar(SDL_Surface *dest, FontManager *fm, int x, int y, int w, int h, const char *label,
+                   unsigned cur, unsigned max, std::uint32_t fillArgb) {
+    if (!dest || w <= 0 || h <= 0) {
+        return;
+    }
+    SDL_Rect bg{x, y, w, h};
+    TnC_FillArgb(dest, &bg, 0xFF1A1A1A);
+    if (max > 0 && cur > 0) {
+        const int fw = static_cast<int>((static_cast<unsigned long long>(cur) * static_cast<unsigned>(w)) / max);
+        if (fw > 0) {
+            SDL_Rect fill{x, y, fw, h};
+            TnC_FillArgb(dest, &fill, fillArgb);
+        }
+    }
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%s %u/%u", label, cur, max);
+    blitText(fm, dest, x + 4, y + 1, buf, 0xFFFFFFFF);
+}
+
 int facingDegreesFromDelta(const int dx, const int dy) {
     if (dx == 1 && dy == 0) {
         return 270;
@@ -259,6 +278,11 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
         T4CActivePlayer active{};
         T4CLoginSessionGetActivePlayer(&active);
         T4CGameMusic::LoadNewSound(zone_, playerX_, playerY_, active.level);
+        T4CPlayerStatus status{};
+        T4CLoginSessionGetPlayerStatus(&status);
+        if (!status.valid) {
+            T4CLoginSessionRequestPlayerStatus();
+        }
     }
 #endif
     return true;
@@ -540,10 +564,14 @@ void GameWorldScreen::redraw() {
     char charloc[128];
 #if defined(LINUX_PORT)
     T4CActivePlayer active{};
+    T4CPlayerStatus status{};
     T4CLoginSessionGetActivePlayer(&active);
+    T4CLoginSessionGetPlayerStatus(&status);
+    const unsigned displayLevel =
+        status.valid && status.level != 0 ? static_cast<unsigned>(status.level) : static_cast<unsigned>(active.level);
     if (active.valid && !active.name.empty()) {
         snprintf(charloc, sizeof(charloc), "%s niv %u | %u,%u Z%u | app %u | %s | lum %.2f | FPS %.0f",
-                 active.name.c_str(), static_cast<unsigned>(active.level), playerX_, playerY_, zone_,
+                 active.name.c_str(), displayLevel, playerX_, playerY_, zone_,
                  static_cast<unsigned>(active.appearance), T4CPlayerSpriteNpcName(active),
                  presenter_.brightnessScale(), fps_);
     } else {
@@ -557,6 +585,30 @@ void GameWorldScreen::redraw() {
         SDL_BlitSurface(txt_loc, nullptr, screen_, nullptr);
         SDL_DestroySurface(txt_loc);
     }
+
+#if defined(LINUX_PORT)
+    if (status.valid) {
+        constexpr int barX = 0;
+        constexpr int barW = 220;
+        constexpr int barH = 14;
+        int barY = 18;
+        if (active.valid && !active.name.empty()) {
+            barY = 22;
+        }
+        drawStatusBar(screen_, fm_, barX, barY, barW, barH, "PV", status.hp, status.maxHp, 0xFFCC3333);
+        drawStatusBar(screen_, fm_, barX, barY + barH + 2, barW, barH, "Mana", static_cast<unsigned>(status.mana),
+                      static_cast<unsigned>(status.maxMana), 0xFF3366CC);
+        char xpLine[64];
+        if (status.xpToNextLevel > 0) {
+            std::snprintf(xpLine, sizeof(xpLine), "XP %llu / %llu",
+                          static_cast<unsigned long long>(status.xp),
+                          static_cast<unsigned long long>(status.xpToNextLevel));
+        } else {
+            std::snprintf(xpLine, sizeof(xpLine), "XP %llu", static_cast<unsigned long long>(status.xp));
+        }
+        blitText(fm_, screen_, barX + 4, barY + (barH + 2) * 2 + 2, xpLine, 0xFFCCCCCC);
+    }
+#endif
 
     if (sideMenu_.isOpen()) {
         sideMenu_.draw(screen_);
