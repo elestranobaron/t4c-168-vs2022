@@ -97,7 +97,6 @@ bool LoadWavFile(const std::string &path, MusicStreamState &st) {
 }
 
 bool OpenMusicStream(MusicStreamState &st) {
-    CloseStream(st);
     if (!st.wavData || st.wavLen == 0) {
         return false;
     }
@@ -117,8 +116,9 @@ bool OpenMusicStream(MusicStreamState &st) {
 }
 
 void PlayTrackId(int trackId) {
+    CloseStream(g_music);
+
     if (trackId == T4C_MUSIC_SILENCE) {
-        CloseStream(g_music);
         FreeWav(g_music);
         g_currentTrackId = T4C_MUSIC_SILENCE;
         SDL_Log("[GameMusic] silence");

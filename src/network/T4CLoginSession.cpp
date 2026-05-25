@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <chrono>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "CommCenter.h"
@@ -100,9 +101,19 @@ static constexpr std::uint16_t kTfcPacketPopup = 10004;
 
 static T4CActivePlayer g_activePlayer{};
 static std::mutex g_activePlayerMutex;
+/** Classe derivee du questionnaire (opcode 25), cle = nom perso. */
+static std::unordered_map<std::string, std::uint8_t> g_characterClassByName;
 static std::atomic<bool> g_playerPopupPending{false};
 static T4CPlayerTeleport g_pendingTeleport{};
 static std::atomic<bool> g_playerTeleportPending{false};
+
+static std::mutex g_remoteEventsMutex;
+static std::vector<T4CRemoteUnitEvent> g_remoteEvents;
+
+/** __EVENT_OBJECT_MOVED (EventListing.h) — deplacement broadcast. */
+static constexpr std::uint16_t kEventObjectMoved = 1;
+/** __EVENT_OBJECT_APPEARED_LIST — lot initial GetNearItems / peripherie. */
+static constexpr std::uint16_t kEventObjectAppearedList = 16;
 
 constexpr std::uint16_t kTfcStillConnected = 10; /* TFCSocket.h — serveur ; reponse = RQ_Ack (10) */
 
@@ -926,15 +937,342 @@ static int ClassIndexFromAppearance(std::uint16_t appearance) {
     return -1;
 }
 
+/** Aligne Character.cpp CreateCharacter : indice 0–4 avec reponse la plus forte. */
+static int ClassIndexFromQuestionnaireStats(const unsigned char stats[5]) {
+    if (!stats) {
+        return 0;
+    }
+    int best = 0;
+    int bestVal = stats[0];
+    for (int i = 1; i < 5; ++i) {
+        if (stats[i] > bestVal) {
+            best = i;
+            bestVal = stats[i];
+        }
+    }
+    if (best > 3) {
+        best = 0;
+    }
+    return best;
+}
+
+static int ClassIndexFromRaceField(std::uint16_t race) {
+    if (race >= 10001 && race <= 10004) {
+        return static_cast<int>(race - 10001);
+    }
+    if (race >= 15001 && race <= 15004) {
+        return static_cast<int>(race - 15001);
+    }
+    return -1;
+}
+
 static bool IsFemaleAppearance(std::uint16_t appearance) {
     return appearance == 10012 || appearance == 15012 || (appearance >= 15001 && appearance <= 15004);
 }
 
+/** Apparences PC / puppet (RaceListing.h) — pas les creatures (>= 20000). */
+static bool IsPlayerUnitAppearance(std::uint16_t appearance) {
+    if (appearance >= 10001 && appearance <= 10004) {
+        return true;
+    }
+    if (appearance >= 15001 && appearance <= 15004) {
+        return true;
+    }
+    return appearance == 10011 || appearance == 10012 || appearance == 15011 || appearance == 15012;
+}
+
+/** Unite affichable (mob, PNJ, autre joueur) — pas objets sol (< 10001). */
+static bool IsRemoteDrawableUnit(const std::uint16_t appearance) {
+    if (IsPlayerUnitAppearance(appearance)) {
+        return true;
+    }
+    if (appearance >= 10005 && appearance <= 10010) {
+        return true;
+    }
+    if (appearance >= 15005 && appearance <= 15010) {
+        return true;
+    }
+    if (appearance >= 20001 && appearance < 30000) {
+        return true;
+    }
+    return false;
+}
+
+static bool IsLocalPlayerUnitId(const std::int32_t unitId) {
+    std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+    return g_activePlayer.valid && g_activePlayer.unitId != 0 && unitId == g_activePlayer.unitId;
+}
+
+/** Ne pas instancier le joueur local comme unite distante (opcode 16 avant unitId connu). */
+static bool ShouldSkipAsRemoteUnit(const unsigned int x, const unsigned int y, const std::uint16_t appearance,
+                                   const std::int32_t unitId) {
+    std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+    if (!g_activePlayer.valid) {
+        return false;
+    }
+    if (g_activePlayer.unitId != 0 && unitId == g_activePlayer.unitId) {
+        return true;
+    }
+    if (IsPlayerUnitAppearance(appearance) && x == g_activePlayer.serverX && y == g_activePlayer.serverY) {
+        return true;
+    }
+    return false;
+}
+
+static void PushRemoteUnitEvent(T4CRemoteUnitEvent ev) {
+    std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
+    g_remoteEvents.push_back(ev);
+}
+
+static bool ParsePacketUnitInformation(const unsigned char *data, int off, int len, std::uint16_t *appearance,
+                                       std::int32_t *unitId, char *radiance, char *status, char *hpPercent) {
+    if (!data || !appearance || !unitId || off + 11 > len) {
+        return false;
+    }
+    *appearance = ReadBeUint16(data, off, len);
+    *unitId = ReadBeInt32Msf(data, off + 2, len);
+    if (radiance) {
+        *radiance = static_cast<char>(data[off + 6]);
+    }
+    if (status) {
+        *status = static_cast<char>(data[off + 7]);
+    }
+    if (hpPercent) {
+        *hpPercent = static_cast<char>(data[off + 8]);
+    }
+    return true;
+}
+
+const char *T4CSpriteNameFromAppearance(const std::uint16_t appearance) {
+    if (IsPlayerUnitAppearance(appearance)) {
+        T4CActivePlayer tmp{};
+        tmp.appearance = appearance;
+        tmp.female = IsFemaleAppearance(appearance);
+        return T4CPlayerSpriteNpcName(tmp);
+    }
+    switch (appearance) {
+        case 10005:
+        case 15005:
+            return "PaysanModel1";
+        case 10006:
+        case 15006:
+            return "GuardModel1";
+        case 10007:
+        case 15007:
+            return "Mage";
+        case 10008:
+        case 15008:
+            return "PaysanneModel1";
+        case 10009:
+        case 15009:
+            return "Cleric";
+        case 10010:
+        case 15010:
+            return "BlackWarrior";
+        case 20001:
+        case 25001:
+            return "Goblin";
+        case 20002:
+        case 25002:
+            return "Bat";
+        case 20003:
+        case 25003:
+            return "Rat";
+        case 20004:
+        case 25004:
+            return "Kobold";
+        case 20005:
+        case 25005:
+            return "Zombie";
+        case 20006:
+        case 25006:
+            return "BlackWarrior";
+        case 20007:
+        case 25007:
+            return "Spider";
+        case 20008:
+        case 25008:
+            return "Orc";
+        case 20009:
+        case 25009:
+            return "Zombie";
+        case 20012:
+        case 25012:
+            return "Skeleton";
+        case 20022:
+        case 25022:
+            return "Wolf";
+        case 20028:
+        case 25028:
+            return "Dragon";
+        case 20039:
+        case 25039:
+            return "Mage";
+        case 20042:
+        case 25042:
+            return "Thief";
+        case 20043:
+        case 25043:
+            return "Warrio";
+        case 20044:
+        case 25044:
+            return "Cleric";
+        default:
+            break;
+    }
+    return "BlackWarrior";
+}
+
+static void QueueRemoteUnitSpawn(const unsigned int x, const unsigned int y, const std::uint16_t appearance,
+                                 const std::int32_t unitId, const char hpPercent) {
+    if (!IsRemoteDrawableUnit(appearance) || ShouldSkipAsRemoteUnit(x, y, appearance, unitId)) {
+        return;
+    }
+    T4CRemoteUnitEvent ev{};
+    ev.kind = T4CRemoteUnitEventKind::Spawn;
+    ev.unitId = unitId;
+    ev.appearance = appearance;
+    ev.x = x;
+    ev.y = y;
+    ev.hpPercent = hpPercent;
+    PushRemoteUnitEvent(ev);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] Unite distante spawn id=%d app=%u @ %u,%u sprite=%s.",
+                           static_cast<int>(unitId), static_cast<unsigned>(appearance), x, y,
+                           T4CSpriteNameFromAppearance(appearance));
+}
+
+static void QueueRemoteUnitMove(const unsigned int x, const unsigned int y, const std::uint16_t appearance,
+                                const std::int32_t unitId) {
+    if (!IsRemoteDrawableUnit(appearance) || ShouldSkipAsRemoteUnit(x, y, appearance, unitId)) {
+        return;
+    }
+    T4CRemoteUnitEvent ev{};
+    ev.kind = T4CRemoteUnitEventKind::Move;
+    ev.unitId = unitId;
+    ev.appearance = appearance;
+    ev.x = x;
+    ev.y = y;
+    PushRemoteUnitEvent(ev);
+}
+
+static void QueueRemoteUnitUpdate(const std::uint16_t appearance, const std::int32_t unitId, const char hpPercent) {
+    if (!IsRemoteDrawableUnit(appearance) || IsLocalPlayerUnitId(unitId)) {
+        return;
+    }
+    T4CRemoteUnitEvent ev{};
+    ev.kind = T4CRemoteUnitEventKind::Update;
+    ev.unitId = unitId;
+    ev.appearance = appearance;
+    ev.hpPercent = hpPercent;
+    PushRemoteUnitEvent(ev);
+}
+
+static void QueueRemoteUnitRemove(const std::int32_t unitId) {
+    if (unitId == 0 || IsLocalPlayerUnitId(unitId)) {
+        return;
+    }
+    T4CRemoteUnitEvent ev{};
+    ev.kind = T4CRemoteUnitEventKind::Remove;
+    ev.unitId = unitId;
+    PushRemoteUnitEvent(ev);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Unite distante remove id=%d.", static_cast<int>(unitId));
+}
+
+static void HandleObjectAppearedList(const unsigned char *data, int len) {
+    if (!data || len < 8 || !TfcHeaderLooksSane(data, len)) {
+        return;
+    }
+    const int count = static_cast<int>(ReadBeUint16(data, 6, len));
+    int off = 8;
+    for (int i = 0; i < count; ++i) {
+        if (off + 13 > len) {
+            break;
+        }
+        const std::int16_t sx = static_cast<std::int16_t>(ReadBeUint16(data, off, len));
+        const std::int16_t sy = static_cast<std::int16_t>(ReadBeUint16(data, off + 2, len));
+        std::uint16_t appearance = 0;
+        std::int32_t unitId = 0;
+        char hpPercent = 0;
+        if (!ParsePacketUnitInformation(data, off + 4, len, &appearance, &unitId, nullptr, nullptr, &hpPercent)) {
+            break;
+        }
+        if (sx >= 0 && sy >= 0) {
+            QueueRemoteUnitSpawn(static_cast<unsigned int>(sx), static_cast<unsigned int>(sy), appearance, unitId,
+                                 hpPercent);
+        }
+        off += 13;
+    }
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] __EVENT_OBJECT_APPEARED_LIST (16) : %d unite(s) peripheriques.",
+                           count);
+}
+
+static void HandleUnitUpdate(const unsigned char *data, int len) {
+    if (!data || len < 17 || !TfcHeaderLooksSane(data, len)) {
+        return;
+    }
+    std::uint16_t appearance = 0;
+    std::int32_t unitId = 0;
+    char hpPercent = 0;
+    if (!ParsePacketUnitInformation(data, 6, len, &appearance, &unitId, nullptr, nullptr, &hpPercent)) {
+        return;
+    }
+    QueueRemoteUnitUpdate(appearance, unitId, hpPercent);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_UnitUpdate (69) id=%d app=%u hp=%d%% sprite=%s.",
+                           static_cast<int>(unitId), static_cast<unsigned>(appearance),
+                           static_cast<int>(static_cast<unsigned char>(hpPercent)),
+                           T4CSpriteNameFromAppearance(appearance));
+}
+
+static void HandleMissingUnit(const unsigned char *data, int len) {
+    if (!data || len < 10 || !TfcHeaderLooksSane(data, len)) {
+        return;
+    }
+    const std::int32_t unitId = ReadBeInt32Msf(data, 6, len);
+    QueueRemoteUnitRemove(unitId);
+}
+
+static bool ApplyRemoteUnitMove(const unsigned char *data, int len) {
+    if (!data || len < 19 || !TfcHeaderLooksSane(data, len)) {
+        return false;
+    }
+    const std::int16_t sx = static_cast<std::int16_t>(ReadBeUint16(data, 6, len));
+    const std::int16_t sy = static_cast<std::int16_t>(ReadBeUint16(data, 8, len));
+    if (sx < 0 || sy < 0) {
+        return false;
+    }
+    std::uint16_t appearance = 0;
+    std::int32_t unitId = 0;
+    if (!ParsePacketUnitInformation(data, 10, len, &appearance, &unitId, nullptr, nullptr, nullptr)) {
+        return false;
+    }
+    if (IsLocalPlayerUnitId(unitId)) {
+        return false;
+    }
+    if (!IsRemoteDrawableUnit(appearance)) {
+        return false;
+    }
+    QueueRemoteUnitMove(static_cast<unsigned int>(sx), static_cast<unsigned int>(sy), appearance, unitId);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] __EVENT_OBJECT_MOVED (1) — distant id=%d app=%u @ %u,%u sprite=%s.",
+                           static_cast<int>(unitId), static_cast<unsigned>(appearance),
+                           static_cast<unsigned>(sx), static_cast<unsigned>(sy),
+                           T4CSpriteNameFromAppearance(appearance));
+    return true;
+}
+
 const char *T4CPlayerSpriteNpcName(const T4CActivePlayer &player) {
+    /* NPCList.txt (TnC) : « Warrio » = guerrier humain — nom fichier VSF, pas « Warrior » Windows. */
     static const char *const kClassSprites[] = {"Warrio", "Wizard", "Cleric", "Thief"};
     int cls = ClassIndexFromAppearance(player.appearance);
     if (cls < 0) {
-        cls = static_cast<int>(player.race);
+        if (player.classIndex <= 3) {
+            cls = static_cast<int>(player.classIndex);
+        } else {
+            cls = ClassIndexFromRaceField(player.race);
+        }
     }
     if (cls < 0 || cls > 3) {
         cls = 0;
@@ -942,20 +1280,57 @@ const char *T4CPlayerSpriteNpcName(const T4CActivePlayer &player) {
     return kClassSprites[cls];
 }
 
-static void ApplyServerUnitPosition(const unsigned char *data, int len) {
-    if (!data || len < 10 || !TfcHeaderLooksSane(data, len)) {
-        return;
+/** Serveur : __EVENT_OBJECT_MOVED (opcode 1) — X,Y + PacketUnitInformation (appearance, unitId, …). */
+static bool ApplyServerUnitPosition(const unsigned char *data, int len) {
+    if (!data || len < 19 || !TfcHeaderLooksSane(data, len)) {
+        return false;
     }
     const std::int16_t sx = static_cast<std::int16_t>(ReadBeUint16(data, 6, len));
     const std::int16_t sy = static_cast<std::int16_t>(ReadBeUint16(data, 8, len));
     if (sx < 0 || sy < 0) {
-        return;
+        return false;
     }
+    const std::uint16_t appearance = ReadBeUint16(data, 10, len);
+    if (!IsPlayerUnitAppearance(appearance)) {
+        return false;
+    }
+    const std::int32_t unitId = ReadBeInt32Msf(data, 12, len);
+    const unsigned int ux = static_cast<unsigned int>(sx);
+    const unsigned int uy = static_cast<unsigned int>(sy);
+
     std::lock_guard<std::mutex> lock(g_activePlayerMutex);
-    g_activePlayer.serverX = static_cast<unsigned int>(sx);
-    g_activePlayer.serverY = static_cast<unsigned int>(sy);
-    g_activePlayer.valid = true;
+    if (!g_activePlayer.valid) {
+        return false;
+    }
+    const int mdx = static_cast<int>(ux) - static_cast<int>(g_activePlayer.serverX);
+    const int mdy = static_cast<int>(uy) - static_cast<int>(g_activePlayer.serverY);
+    const int amdx = mdx < 0 ? -mdx : mdx;
+    const int amdy = mdy < 0 ? -mdy : mdy;
+    const bool adjacentMove = amdx <= 1 && amdy <= 1 && (mdx != 0 || mdy != 0);
+
+    if (g_activePlayer.unitId == 0) {
+        if (!adjacentMove) {
+            return false;
+        }
+        g_activePlayer.unitId = unitId;
+        if (appearance != 0) {
+            g_activePlayer.appearance = appearance;
+            g_activePlayer.female = IsFemaleAppearance(appearance);
+        }
+    } else if (unitId != g_activePlayer.unitId) {
+        if (!adjacentMove ||
+            (g_activePlayer.appearance != 0 && appearance != g_activePlayer.appearance)) {
+            return false;
+        }
+        g_activePlayer.unitId = unitId;
+    }
+    if (ux == g_activePlayer.serverX && uy == g_activePlayer.serverY) {
+        return false;
+    }
+    g_activePlayer.serverX = ux;
+    g_activePlayer.serverY = uy;
     g_playerPopupPending.store(true);
+    return true;
 }
 
 static void HandleTeleportPlayer(const unsigned char *data, int len) {
@@ -982,6 +1357,7 @@ static void HandleTeleportPlayer(const unsigned char *data, int len) {
 
     g_playerPopupPending.store(false);
     g_playerTeleportPending.store(true);
+    T4CLoginSessionClearRemoteUnits();
 
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
                            "[PHASE] RQ_TeleportPlayer (57) : @ %u,%u monde %u.",
@@ -993,34 +1369,59 @@ static void HandleTeleportPlayer(const unsigned char *data, int len) {
 }
 
 static void HandlePacketPopup(const unsigned char *data, int len) {
-    if (!data || len < 16 || !TfcHeaderLooksSane(data, len)) {
+    if (!data || len < 19 || !TfcHeaderLooksSane(data, len)) {
         return;
     }
     const std::int16_t sx = static_cast<std::int16_t>(ReadBeUint16(data, 6, len));
     const std::int16_t sy = static_cast<std::int16_t>(ReadBeUint16(data, 8, len));
-    const std::uint16_t appearance = ReadBeUint16(data, 10, len);
-    const std::int32_t unitId = ReadBeInt32Msf(data, 12, len);
+    std::uint16_t appearance = 0;
+    std::int32_t unitId = 0;
+    char hpPercent = 0;
+    if (!ParsePacketUnitInformation(data, 10, len, &appearance, &unitId, nullptr, nullptr, &hpPercent)) {
+        return;
+    }
 
-    std::lock_guard<std::mutex> lock(g_activePlayerMutex);
-    if (sx >= 0) {
-        g_activePlayer.serverX = static_cast<unsigned int>(sx);
-    }
-    if (sy >= 0) {
-        g_activePlayer.serverY = static_cast<unsigned int>(sy);
-    }
-    if (appearance != 0) {
-        g_activePlayer.appearance = appearance;
-        g_activePlayer.female = IsFemaleAppearance(appearance);
-    }
-    g_activePlayer.unitId = unitId;
-    g_activePlayer.valid = true;
-    g_playerPopupPending.store(true);
+    if (IsPlayerUnitAppearance(appearance)) {
+        bool spawnOtherPlayer = false;
+        {
+            std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+            if (g_activePlayer.unitId != 0 && unitId != g_activePlayer.unitId) {
+                spawnOtherPlayer = true;
+            } else {
+                if (sx >= 0) {
+                    g_activePlayer.serverX = static_cast<unsigned int>(sx);
+                }
+                if (sy >= 0) {
+                    g_activePlayer.serverY = static_cast<unsigned int>(sy);
+                }
+                if (appearance != 0) {
+                    g_activePlayer.appearance = appearance;
+                    g_activePlayer.female = IsFemaleAppearance(appearance);
+                }
+                g_activePlayer.unitId = unitId;
+                g_activePlayer.valid = true;
+                g_playerPopupPending.store(true);
 
-    T4CNetworkDebugLogKind(
-        T4CMatrixLogKind::Phase,
-        "[PHASE] PacketPopup (10004) : pos %u,%u appearance=%u id=%d sprite=%s%s.",
-        g_activePlayer.serverX, g_activePlayer.serverY, static_cast<unsigned>(appearance), static_cast<int>(unitId),
-        T4CPlayerSpriteNpcName(g_activePlayer), g_activePlayer.female ? " (F)" : "");
+                T4CNetworkDebugLogKind(
+                    T4CMatrixLogKind::Phase,
+                    "[PHASE] PacketPopup (10004) : pos %u,%u appearance=%u (0x%04X) id=%d sprite=%s%s.",
+                    g_activePlayer.serverX, g_activePlayer.serverY, static_cast<unsigned>(appearance),
+                    static_cast<unsigned>(appearance), static_cast<int>(unitId), T4CPlayerSpriteNpcName(g_activePlayer),
+                    g_activePlayer.female ? " (F)" : "");
+                return;
+            }
+        }
+        if (spawnOtherPlayer && sx >= 0 && sy >= 0) {
+            QueueRemoteUnitSpawn(static_cast<unsigned int>(sx), static_cast<unsigned int>(sy), appearance, unitId,
+                                 hpPercent);
+        }
+        return;
+    }
+
+    if (sx >= 0 && sy >= 0) {
+        QueueRemoteUnitSpawn(static_cast<unsigned int>(sx), static_cast<unsigned int>(sy), appearance, unitId,
+                             hpPercent);
+    }
 }
 
 /** Aligné sur TFCSocket.h (codes client 1.68) + envoi serveur `sending << (char)N` après l’opcode. */
@@ -1354,23 +1755,33 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
                                "[PHASE] Reponse RQ_FromPreInGameToInGame (46) code=%d.",
                                resultCode);
     } else if (op == kTfcPacketPopup) {
-        T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
-                               "[PHASE] PacketPopup (10004) unite joueur — position / apparence.");
         HandlePacketPopup(bytes, nBufferSize);
+    } else if (op == kEventObjectAppearedList && g_pipelineStep.load() >= 6 && g_fromPreInGameResult.load() == 0) {
+        HandleObjectAppearedList(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_UnitUpdate) && g_pipelineStep.load() >= 6 &&
+               g_fromPreInGameResult.load() == 0) {
+        HandleUnitUpdate(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_MissingUnit) && g_pipelineStep.load() >= 6 &&
+               g_fromPreInGameResult.load() == 0) {
+        HandleMissingUnit(bytes, nBufferSize);
     } else if (op == static_cast<std::uint16_t>(RQ_TeleportPlayer) && g_pipelineStep.load() >= 6 &&
                g_fromPreInGameResult.load() == 0) {
         HandleTeleportPlayer(bytes, nBufferSize);
-    } else if (op == 1 && g_pipelineStep.load() >= 6 && g_fromPreInGameResult.load() == 0) {
-        ApplyServerUnitPosition(bytes, nBufferSize);
-        unsigned int sx = 0;
-        unsigned int sy = 0;
-        {
-            std::lock_guard<std::mutex> lock(g_activePlayerMutex);
-            sx = g_activePlayer.serverX;
-            sy = g_activePlayer.serverY;
+    } else if (op == kEventObjectMoved && g_pipelineStep.load() >= 6 && g_fromPreInGameResult.load() == 0) {
+        if (ApplyServerUnitPosition(bytes, nBufferSize)) {
+            T4CActivePlayer snap{};
+            {
+                std::lock_guard<std::mutex> lock(g_activePlayerMutex);
+                snap = g_activePlayer;
+            }
+            T4CNetworkDebugLogKind(
+                T4CMatrixLogKind::Phase,
+                "[PHASE] __EVENT_OBJECT_MOVED (1) — JOUEUR app=%u (0x%04X) id=%d @ %u,%u sprite=%s.",
+                static_cast<unsigned>(snap.appearance), static_cast<unsigned>(snap.appearance),
+                static_cast<int>(snap.unitId), snap.serverX, snap.serverY, T4CPlayerSpriteNpcName(snap));
+        } else {
+            ApplyRemoteUnitMove(bytes, nBufferSize);
         }
-        T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
-                               "[PHASE] Reponse deplacement (1) — position serveur @ %u,%u.", sx, sy);
     }
 }
 
@@ -1814,8 +2225,16 @@ bool T4CLoginSessionRequestPutPlayerInGame(const std::string &playerName) {
             if (slot.name == playerName) {
                 g_activePlayer.race = slot.race;
                 g_activePlayer.level = slot.level;
+                const int raceCls = ClassIndexFromRaceField(slot.race);
+                if (raceCls >= 0) {
+                    g_activePlayer.classIndex = static_cast<std::uint8_t>(raceCls);
+                }
                 break;
             }
+        }
+        const auto clsIt = g_characterClassByName.find(playerName);
+        if (clsIt != g_characterClassByName.end()) {
+            g_activePlayer.classIndex = clsIt->second;
         }
     }
     g_playerPopupPending.store(false);
@@ -1907,6 +2326,7 @@ bool T4CLoginSessionRequestCreatePlayer(const std::string &name, unsigned char s
         g_createPlayerErrorMessage.clear();
         g_pendingCreatePlayerName = name;
     }
+    g_characterClassByName[name] = static_cast<std::uint8_t>(ClassIndexFromQuestionnaireStats(stats));
     const auto pkt = BuildCreatePlayerPacket(name, sex, stats);
     g_comm->SendPacket(g_serverAddr, const_cast<LPBYTE>(pkt.data()), static_cast<int>(pkt.size()), 0, 0);
     g_waitingCreatePlayer.store(true);
@@ -2085,6 +2505,20 @@ void T4CLoginSessionUpdateActivePlayerPosition(const unsigned int x, const unsig
     }
 }
 
+void T4CLoginSessionDrainRemoteUnitEvents(std::vector<T4CRemoteUnitEvent> *outEvents) {
+    if (!outEvents) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
+    outEvents->insert(outEvents->end(), g_remoteEvents.begin(), g_remoteEvents.end());
+    g_remoteEvents.clear();
+}
+
+void T4CLoginSessionClearRemoteUnits() {
+    std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
+    g_remoteEvents.clear();
+}
+
 bool T4CLoginSessionSendMove(const std::uint16_t moveOpcode) {
     if (moveOpcode < 1 || moveOpcode > 8) {
         return false;
@@ -2133,6 +2567,7 @@ void T4CLoginSessionResetAfterReturnToLogin() {
     g_playerPopupPending.store(false);
     g_playerTeleportPending.store(false);
     g_pendingTeleport = {};
+    T4CLoginSessionClearRemoteUnits();
     {
         std::lock_guard<std::mutex> lock(g_activePlayerMutex);
         g_activePlayer = {};
@@ -2300,6 +2735,14 @@ bool T4CLoginSessionSendMove(std::uint16_t) {
 }
 
 void T4CLoginSessionUpdateActivePlayerPosition(unsigned int, unsigned int) {}
+
+void T4CLoginSessionDrainRemoteUnitEvents(std::vector<T4CRemoteUnitEvent> *) {}
+
+void T4CLoginSessionClearRemoteUnits() {}
+
+const char *T4CSpriteNameFromAppearance(std::uint16_t) {
+    return "BlackWarrior";
+}
 
 const char *T4CPlayerSpriteNpcName(const T4CActivePlayer &) {
     return "Warrio";

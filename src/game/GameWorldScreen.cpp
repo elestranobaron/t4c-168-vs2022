@@ -16,6 +16,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 #include <string>
 #include <utility>
 
@@ -229,8 +230,9 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
     if (npcm_->ajout_npc(0, DupCStr(spriteName), static_cast<int>(px), static_cast<int>(py), 180)) {
         npcm_->set_action(0, 'S');
         playerNpcSpawned_ = true;
-        SDL_Log("[GameWorld] joueur « %s » niv %u sprite=%s @ %u,%u%s", active.name.c_str(),
-                static_cast<unsigned>(active.level), spriteName, px, py, active.female ? " (F)" : "");
+        SDL_Log("[GameWorld] joueur « %s » niv %u sprite=%s app=%u%s @ %u,%u", active.name.c_str(),
+                static_cast<unsigned>(active.level), spriteName, static_cast<unsigned>(active.appearance),
+                active.female ? " (F)" : "", px, py);
     } else {
         SDL_Log("[GameWorld] echec ajout sprite joueur « %s » — verifier NPCList.txt", spriteName);
     }
@@ -262,9 +264,96 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
     return true;
 }
 
+void GameWorldScreen::clearRemoteUnits() {
+    if (npcm_) {
+        for (const std::int32_t id : remoteUnitIds_) {
+            npcm_->remove_npc(static_cast<int>(id));
+        }
+    }
+    remoteUnitIds_.clear();
+    remotePositions_.clear();
+}
+
+void GameWorldScreen::syncRemoteUnitsFromNetwork() {
+    if (!npcm_) {
+        return;
+    }
+
+    std::vector<T4CRemoteUnitEvent> events;
+    T4CLoginSessionDrainRemoteUnitEvents(&events);
+    if (events.empty()) {
+        return;
+    }
+
+    for (const T4CRemoteUnitEvent &ev : events) {
+        const int npcId = static_cast<int>(ev.unitId);
+        if (npcId == 0) {
+            continue;
+        }
+
+        switch (ev.kind) {
+            case T4CRemoteUnitEventKind::Spawn: {
+                const char *sprite = T4CSpriteNameFromAppearance(ev.appearance);
+                if (remoteUnitIds_.count(ev.unitId) != 0) {
+                    npcm_->set_world_pos(npcId, static_cast<int>(ev.x), static_cast<int>(ev.y));
+                } else if (npcm_->ajout_npc(npcId, const_cast<char *>(sprite), static_cast<int>(ev.x),
+                                            static_cast<int>(ev.y), 180)) {
+                    npcm_->set_action(npcId, 'S');
+                    remoteUnitIds_.insert(ev.unitId);
+                    SDL_Log("[GameWorld] unite distante spawn id=%d app=%u sprite=%s @ %u,%u", npcId,
+                            static_cast<unsigned>(ev.appearance), sprite, ev.x, ev.y);
+                } else {
+                    SDL_Log("[GameWorld] echec spawn unite id=%d sprite=%s (NPCList?)", npcId, sprite);
+                }
+                remotePositions_[ev.unitId] = {ev.x, ev.y};
+                break;
+            }
+            case T4CRemoteUnitEventKind::Move: {
+                if (remoteUnitIds_.count(ev.unitId) == 0) {
+                    const char *sprite = T4CSpriteNameFromAppearance(ev.appearance);
+                    if (npcm_->ajout_npc(npcId, const_cast<char *>(sprite), static_cast<int>(ev.x),
+                                         static_cast<int>(ev.y), 180)) {
+                        npcm_->set_action(npcId, 'S');
+                        remoteUnitIds_.insert(ev.unitId);
+                    }
+                }
+                const auto prevIt = remotePositions_.find(ev.unitId);
+                const bool hasPrev = prevIt != remotePositions_.end();
+                const unsigned int px = hasPrev ? prevIt->second.first : ev.x;
+                const unsigned int py = hasPrev ? prevIt->second.second : ev.y;
+                const int dx = static_cast<int>(ev.x) - static_cast<int>(px);
+                const int dy = static_cast<int>(ev.y) - static_cast<int>(py);
+                const bool adjacent = hasPrev && ((dx == 0 && (dy == 1 || dy == -1)) || (dy == 0 && (dx == 1 || dx == -1)) ||
+                                                  (dx != 0 && dy != 0 && std::abs(dx) == 1 && std::abs(dy) == 1));
+                if (adjacent && !npcm_->is_moving(npcId)) {
+                    npcm_->move_to(npcId, ev.x, ev.y, kMoveVisualSpeed, kMoveVisualStepsMul);
+                } else {
+                    npcm_->set_world_pos(npcId, static_cast<int>(ev.x), static_cast<int>(ev.y));
+                }
+                remotePositions_[ev.unitId] = {ev.x, ev.y};
+                break;
+            }
+            case T4CRemoteUnitEventKind::Update:
+                if (remoteUnitIds_.count(ev.unitId) != 0 && ev.appearance != 0) {
+                    npcm_->set_npc_type(npcId, T4CSpriteNameFromAppearance(ev.appearance));
+                }
+                break;
+            case T4CRemoteUnitEventKind::Remove:
+                if (remoteUnitIds_.count(ev.unitId) != 0) {
+                    npcm_->remove_npc(npcId);
+                    remoteUnitIds_.erase(ev.unitId);
+                    remotePositions_.erase(ev.unitId);
+                }
+                break;
+        }
+    }
+}
+
 void GameWorldScreen::Shutdown() {
     ready_ = false;
     playerNpcSpawned_ = false;
+    remoteUnitIds_.clear();
+    remotePositions_.clear();
     delete npcm_;
     npcm_ = nullptr;
     delete txtm_;
@@ -330,6 +419,13 @@ bool GameWorldScreen::tryMovePlayer(const std::uint16_t moveOpcode) {
     if (playerNpcSpawned_ && npcm_ && npcm_->is_moving(0)) {
         return false;
     }
+    if (awaitingServerMove_) {
+        if (TnC_GetTicksMs() - awaitingServerMoveSince_ > 500) {
+            awaitingServerMove_ = false;
+        } else {
+            return false;
+        }
+    }
     int dx = 0;
     int dy = 0;
     if (!moveDeltaFromOpcode(moveOpcode, dx, dy)) {
@@ -345,24 +441,41 @@ bool GameWorldScreen::tryMovePlayer(const std::uint16_t moveOpcode) {
         return false;
     }
 #endif
-    playerX_ = static_cast<unsigned int>(nx);
-    playerY_ = static_cast<unsigned int>(ny);
-    if (playerNpcSpawned_ && npcm_) {
-        npcm_->move_to(0, static_cast<unsigned int>(nx), static_cast<unsigned int>(ny), kMoveVisualSpeed,
-                       kMoveVisualStepsMul);
-    }
+    awaitingServerMove_ = true;
+    awaitingServerMoveSince_ = TnC_GetTicksMs();
     setPlayerFacingFromDelta(dx, dy);
-    setPlayerWalkAnim(true);
     return true;
 }
 
-void GameWorldScreen::pollHeldMovement() {
-    if (sideMenu_.isOpen() || optionsPopupOpen_) {
+void GameWorldScreen::applyServerPlayerPosition(const unsigned int x, const unsigned int y) {
+    const int dx = static_cast<int>(x) - static_cast<int>(playerX_);
+    const int dy = static_cast<int>(y) - static_cast<int>(playerY_);
+    if (dx == 0 && dy == 0) {
         return;
+    }
+    const int adx = dx < 0 ? -dx : dx;
+    const int ady = dy < 0 ? -dy : dy;
+    const bool oneStep = adx <= 1 && ady <= 1 && (dx != 0 || dy != 0);
+    if (oneStep && playerNpcSpawned_ && npcm_) {
+        npcm_->set_world_pos(0, static_cast<int>(playerX_), static_cast<int>(playerY_));
+        npcm_->move_to(0, x, y, kMoveVisualSpeed, kMoveVisualStepsMul);
+        playerX_ = x;
+        playerY_ = y;
+        syncCameraToPlayer();
+        setPlayerWalkAnim(true);
+    } else {
+        snapPlayerVisual(x, y);
+        setPlayerWalkAnim(false);
+    }
+}
+
+std::uint16_t GameWorldScreen::heldMoveOpcode() const {
+    if (sideMenu_.isOpen() || optionsPopupOpen_) {
+        return 0;
     }
     const bool *const keys = SDL_GetKeyboardState(nullptr);
     if (!keys) {
-        return;
+        return 0;
     }
 
     const bool left = keys[SDL_SCANCODE_LEFT] || keys[SDL_SCANCODE_KP_4];
@@ -370,27 +483,43 @@ void GameWorldScreen::pollHeldMovement() {
     const bool up = keys[SDL_SCANCODE_UP] || keys[SDL_SCANCODE_KP_8];
     const bool down = keys[SDL_SCANCODE_DOWN] || keys[SDL_SCANCODE_KP_2];
 
-    std::uint16_t opcode = 0;
     if (left && up) {
-        opcode = 8;
-    } else if (right && up) {
-        opcode = 2;
-    } else if (left && down) {
-        opcode = 6;
-    } else if (right && down) {
-        opcode = 4;
-    } else if (up) {
-        opcode = 1;
-    } else if (down) {
-        opcode = 5;
-    } else if (left) {
-        opcode = 7;
-    } else if (right) {
-        opcode = 3;
+        return 8;
     }
+    if (right && up) {
+        return 2;
+    }
+    if (left && down) {
+        return 6;
+    }
+    if (right && down) {
+        return 4;
+    }
+    if (up) {
+        return 1;
+    }
+    if (down) {
+        return 5;
+    }
+    if (left) {
+        return 7;
+    }
+    if (right) {
+        return 3;
+    }
+    return 0;
+}
 
-    if (opcode != 0) {
-        tryMovePlayer(opcode);
+void GameWorldScreen::pollHeldMovement() {
+    const std::uint16_t opcode = heldMoveOpcode();
+    if (opcode == 0) {
+        pendingMoveOpcode_ = 0;
+        return;
+    }
+    if (tryMovePlayer(opcode)) {
+        pendingMoveOpcode_ = 0;
+    } else {
+        pendingMoveOpcode_ = opcode;
     }
 }
 
@@ -413,8 +542,10 @@ void GameWorldScreen::redraw() {
     T4CActivePlayer active{};
     T4CLoginSessionGetActivePlayer(&active);
     if (active.valid && !active.name.empty()) {
-        snprintf(charloc, sizeof(charloc), "%s niv %u | %u,%u Z%u | lum %.2f | FPS %.0f", active.name.c_str(),
-                 static_cast<unsigned>(active.level), playerX_, playerY_, zone_, presenter_.brightnessScale(), fps_);
+        snprintf(charloc, sizeof(charloc), "%s niv %u | %u,%u Z%u | app %u | %s | lum %.2f | FPS %.0f",
+                 active.name.c_str(), static_cast<unsigned>(active.level), playerX_, playerY_, zone_,
+                 static_cast<unsigned>(active.appearance), T4CPlayerSpriteNpcName(active),
+                 presenter_.brightnessScale(), fps_);
     } else {
         snprintf(charloc, sizeof(charloc), "Joueur %u,%u | vue %u,%u Z%u | lum %.2f | FPS %.0f", playerX_, playerY_,
                  locX_, locY_, zone_, presenter_.brightnessScale(), fps_);
@@ -458,6 +589,9 @@ void GameWorldScreen::Update() {
 #if defined(LINUX_PORT)
     T4CPlayerTeleport teleport{};
     if (T4CLoginSessionConsumePlayerTeleport(&teleport)) {
+        clearRemoteUnits();
+        T4CLoginSessionClearRemoteUnits();
+        awaitingServerMove_ = false;
         zone_ = teleport.world;
         mapFlag_ = true;
         snapPlayerVisual(teleport.x, teleport.y);
@@ -473,23 +607,36 @@ void GameWorldScreen::Update() {
 
     pollHeldMovement();
 
-    if (playerNpcSpawned_ && npcm_ && !npcm_->is_moving(0)) {
-        if (locX_ != playerX_ || locY_ != playerY_) {
-            syncCameraToPlayer();
+    syncRemoteUnitsFromNetwork();
+
+    if (playerNpcSpawned_ && npcm_) {
+        const bool moving = npcm_->is_moving(0);
+        if (!moving) {
+            npcm_->set_world_pos(0, static_cast<int>(playerX_), static_cast<int>(playerY_));
+            if (pendingMoveOpcode_ != 0 && heldMoveOpcode() == pendingMoveOpcode_) {
+                const std::uint16_t op = pendingMoveOpcode_;
+                pendingMoveOpcode_ = 0;
+                tryMovePlayer(op);
+            } else if (wasMoving_) {
+                setPlayerWalkAnim(false);
+            }
         }
+        wasMoving_ = npcm_->is_moving(0);
     }
 
 #if defined(LINUX_PORT)
     T4CActivePlayer popup{};
     if (playerNpcSpawned_ && T4CLoginSessionConsumePlayerPopupUpdate(&popup)) {
-        const int dx = static_cast<int>(popup.serverX) - static_cast<int>(playerX_);
-        const int dy = static_cast<int>(popup.serverY) - static_cast<int>(playerY_);
-        snapPlayerVisual(popup.serverX, popup.serverY);
-        if (dx != 0 || dy != 0) {
-            setPlayerFacingFromDelta(dx, dy);
+        awaitingServerMove_ = false;
+        if (popup.serverX != playerX_ || popup.serverY != playerY_) {
+            const int pdx = static_cast<int>(popup.serverX) - static_cast<int>(playerX_);
+            const int pdy = static_cast<int>(popup.serverY) - static_cast<int>(playerY_);
+            applyServerPlayerPosition(popup.serverX, popup.serverY);
+            if (pdx != 0 || pdy != 0) {
+                setPlayerFacingFromDelta(pdx, pdy);
+            }
+            T4CGameMusic::LoadNewSound(zone_, popup.serverX, popup.serverY, popup.level);
         }
-        setPlayerWalkAnim(false);
-        T4CGameMusic::LoadNewSound(zone_, popup.serverX, popup.serverY, popup.level);
     }
 #endif
 
@@ -652,7 +799,9 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
             case SDLK_KP_9:
             case SDLK_KP_1:
             case SDLK_KP_3:
-                setPlayerWalkAnim(false);
+                if (playerNpcSpawned_ && npcm_ && !npcm_->is_moving(0)) {
+                    setPlayerWalkAnim(false);
+                }
                 break;
             default:
                 break;

@@ -2,6 +2,434 @@
 
 Historique des modifications du client sous `#ifdef LINUX_PORT` et de la documentation associée.
 
+> **Convention :** chaque entrée significative est horodatée **`YYYY-MM-DD HH:MM:SS`** (logs réseau, tests utilisateur ou fin de patch).
+
+---
+
+## BACKLOG — Pipeline WDA, skips serveur, assets *(documenté 2026-05-20 — à revoir plus tard)*
+
+> **Statut :** non terminé, **pas bloquant** pour le client Linux actuel (login → monde → musique OK avec skips serveur). Cette section centralise ce qu’il reste à faire côté **serveur + outils WDA + politique Git des assets**.
+
+### État du pipeline WDA (résumé)
+
+| Composant | Emplacement | Statut |
+|-----------|-------------|--------|
+| Key-swap 1.61 → 1.68 | `key_swaps/` | OK round-trip Worlds/Edit/NPCs ; **insuffisant seul** si format 1.61 ≠ parseur 1.68 |
+| Patch LP64 (`lCharges` 4→8 oct) | `second_approach/patch_wda_lp64.py` | OK Worlds + Edit (MD5 documentés CHANGELOG **serveur** 2026-05-18) |
+| Vérif parse objets LP64 | `second_approach/verify_lp64_objects.py` | OK objets ; **creatures pas encore vérifiées** |
+| Specs format txt LP64 | `second_approach/wdatxtadapted/Format du fichier *.wda.txt` | Générées par `adapt_formats.sh` ; **pas encore commitées** |
+| WDA runtime serveur | `T4C_Server_Linux_Final_Step/build/WDA/` | Doit être variante **LP64** (`second_approach/install_to_build.sh`), **pas** Havoc brut réinstallé via `key_swaps/install_to_build.sh` seul |
+
+**Référence serveur détaillée :** repo `T4C_Server_Linux_Final_Step/CHANGELOG.md` entrée **2026-05-18 — Boot WDA**.
+
+---
+
+### Skips serveur actuels (`tools/debug/t4c_env.sh`)
+
+Boot dev validé avec :
+
+```bash
+export T4C_SKIP_GROUND_OBJECTS=1
+export T4C_SKIP_CREATURES=1
+```
+
+| Variable | Ce qu’elle saute | Ce qui reste chargé | Cause racine | Fix attendu |
+|----------|------------------|---------------------|--------------|-------------|
+| **`T4C_SKIP_GROUND_OBJECTS`** | ~2601 appels `create_world_unit` (objets **posés** sur les cartes) | Définitions d’objets (stats, formules) | Blocage spawn (obj. **106** @ 1601,2569) — boucle / `ViewFlag(BLOCKING)` / mutex `WorldMap` | **C++ serveur** (`WorldMap::create_world_unit`, garde-fou `SetBlockingUnit` partiel) — **pas un script Python** |
+| **`T4C_SKIP_CREATURES`** | Lecture + init section **creatures** WDA | Hives, area links, clans (via `SkipSection` + seek offsets) | **Perf** (`WDAFile::Read` octet par octet) + alignement LP64 section creatures | Étendre `patch_wda_lp64` / `verify_lp64_*` **ou** lire certains champs en `DWORD` côté serveur + optim `fread` blocs dans `WDAFile.cpp` |
+
+**Important :** les skips **ne réparent pas** le WDA — ils **contournent** pour booter. Retirer les skips = objectif prod.
+
+**Ordre de travail recommandé (serveur) :**
+
+1. WDA LP64 stable (Worlds + Edit) — patch ou fix `lCharges` DWORD côté C++
+2. Perf `WDAFile::Read` (fread + déchiffrement par blocs)
+3. Retirer `T4C_SKIP_GROUND_OBJECTS` → debug `create_world_unit`
+4. Retirer `T4C_SKIP_CREATURES` → `CreateFrom` + `WDAInitCreatures` complets
+5. NPCs (voir ci-dessous)
+
+---
+
+### NPCs.WDA — plus simple sur la clé, plus compliqué sur le fond
+
+| Aspect | Worlds / Edit | `NPCs.WDA` |
+|--------|---------------|------------|
+| Header WDA `0x0CA7` | Oui | **Non** — format à part |
+| Key-swap 1.61→1.68 | Nécessaire mais pas suffisant | **Round-trip OK** (`key_swaps/test_keyswap.py`) |
+| Patch LP64 charges | Central | **Pas le même sujet** |
+| Parseur | `WDAObjects`, `WDACreatures`, … | `NPCManager::Load` → `NPC::Load` → **arbre d’instructions** |
+| Dépendance | — | Enregistrement NPC via `Unit::GetIDFromName(creatureId)` → **creatures WDA déjà chargées** |
+
+→ **Un script Python « comme les autres »** suffit pour la **clé** ; le reste = **C++ NPC_Editor** + **creatures non skippées**.
+
+---
+
+### WDA en `.txt` — quoi push Git, quoi garder privé
+
+| Fichier | Contenu | Push repo public ? | Risque takedown |
+|---------|---------|-------------------|-----------------|
+| **`Format du fichier T4C *.wda.txt`** | Schéma binaire + clé XOR 3418 octets (~35 Ko) — **pas** les données Havoc | **Oui recommandé** (avec `second_approach/`, `key_swaps/*.py`) | Modéré (clé XOR reverse-engineering) |
+| **`T4C Worlds.txt`** / dumps `wc -d` | Monde Havoc **décompilé** (noms sorts, stats, positions…) | **Non** | Élevé (= contenu jeu) |
+| **`.WDA` binaires** (`output/`, `build/WDA/`) | Données monde chiffrées (~24 Mo) | **Non** | Élevé |
+| **`data/sprites`, `maps`, `sons`** | Assets client runtime (~325 Mo) | **Non** (`.gitignore` actuel) | Élevé |
+
+**Commit public envisagé plus tard (pipeline seul, sans binaires) :**
+
+```
+second_approach/wdatxtadapted/Format du fichier *.wda.txt
+second_approach/adapt_formats.sh, patch_wda_lp64.py, verify_lp64_objects.py, build.sh, toolchain/
+key_swaps/*.py, README.md          # clé déjà en Python dans key_161.py
+```
+
+**Hors Git :** `output/*.WDA`, `input/T4C Worlds.txt`, `data/*` binaires, Havoc `tiforci/havoc2/*.WDA`.
+
+---
+
+### Assets client — préservation sans tout publier
+
+Problème : le **code seul** ne suffit pas (`T4C_DATA` requis pour carte + sons). Options documentées :
+
+| Stratégie | Rôle |
+|-----------|------|
+| **Repo public = code + specs WDA txt + scripts** | Sauve le *comment* reconstruire |
+| **Repo privé ou backup local** | Code + `data/` + WDA LP64 |
+| **Manifeste** (`MANIFEST.sha256`, liste fichiers attendus) | Prouve qu’on avait quoi sans redistribuer |
+| **README « apportez vos propres fichiers T4C »** | Parité légale install Rebirth / 1.68 |
+
+Ne **pas** mélanger IP Vircom (`.WDA`, dumps txt données, `data/`) et code GPL/port sur le **même repo public** — risque retrait repo entier (DMCA).
+
+---
+
+### Checklist client (repo `finalstep/client`) — commits futurs
+
+- [ ] Commit `second_approach/` + specs `wdatxtadapted/*.txt` (sans `output/*.WDA`)
+- [ ] Commit `key_swaps/` (scripts Python, sans `output/*.WDA`)
+- [ ] Commit `scripts/assemble_t4c_data.sh` + `data/README.md` (sans binaires `sprites/`/`maps/`/`sons/`)
+- [ ] `data/MANIFEST.md` ou script `verify_t4c_data.sh` (optionnel)
+- [ ] Synchroniser avec fix serveur quand skips retirés
+
+---
+
+## 2026-05-25 — Unités distantes + déplacement serveur-autoritaire
+
+### 2026-05-25 23:03:07 — Validation utilisateur (*« tout est rentré dans l'ordre »*)
+
+Test LH avec creatures WDA actives côté serveur :
+
+- **Déplacement joueur** : orientation immédiate (client) + glide visuel sur ack opcode **1** PC (`app=0x271B` / `0x271C`, ex. `… 27 1B 00 10 0B 38 …`).
+- **Unités distantes** : flood opcode **1** mobs (`app=0x4E26`, brigand 20006) routé vers `ApplyRemoteUnitMove` / `syncRemoteUnitsFromNetwork` — pas de snap caméra joueur.
+- **Collisions** : move serveur-autoritaire (`tryMovePlayer` n'avance plus localement ; `awaitingServerMove_` + `applyServerPlayerPosition`).
+
+**Commit parent documenté :** `6e38fda` (musique). Travail réseau + monde : **non commité** (session 2026-05-21 → 2026-05-25).
+
+---
+
+### 2026-05-25 22:52:10 — Régression : orientation OK, perso immobile
+
+**Symptôme :** après passage en autorité serveur pure, le sprite tourne (facing client dans `tryMovePlayer`) mais **n'avance plus** ; logs opcode **1** joueur présents mais ignorés.
+
+**Cause :** `ApplyServerUnitPosition` refusait tout ack si `g_activePlayer.unitId == 0` (cas fréquent après téléport opcode **57** sans **10004** préalable).
+
+**Fix (`T4CLoginSession.cpp`, ~22:55–23:02) :**
+
+| Règle | Détail |
+|-------|--------|
+| `unitId == 0` | Apprendre l'id depuis le **premier opcode 1 PC** avec déplacement **adjacent** (1 case) à `serverX/Y` |
+| `unitId` connu mais ≠ paquet | Accepter si adjacent **et** même `appearance` (correction id réseau) |
+| Mobs | Toujours exclus par `IsPlayerUnitAppearance` **avant** ce bloc |
+
+---
+
+### 2026-05-25 (session) — Déplacement serveur-autoritaire + régressions téléport
+
+| Horodatage | Problème | Correctif |
+|------------|----------|-----------|
+| **2026-05-25** (session) | Opcode **16** spawne le joueur local comme unité distante | `ShouldSkipAsRemoteUnit` — ignore PC @ position spawn serveur |
+| **2026-05-25** (session) | Opcode **1** ré-apprenait `unitId` depuis n'importe quel PC | Filtre apparence PC strict ; pas de ré-apprentissage depuis mobs |
+| **2026-05-25** (session) | Déplacement optimiste → murs / téléports | `tryMovePlayer` envoie opcode 1–8 sans avance locale ; ack via `applyServerPlayerPosition` |
+| **2026-05-25 22:52:10** | Perso figé après fix ci-dessus | Ré-apprentissage `unitId` adjacent (voir entrée **23:03:07**) |
+
+---
+
+### 2026-05-25 (session) — Affichage unités distantes (réseau → NPCManager)
+
+Voir aussi § G (détail opcode par opcode) dans l'entrée **2026-05-21** ci-dessous.
+
+| Opcode | Action client |
+|--------|---------------|
+| **10004** | Joueur local (PC) ou spawn distant |
+| **1** | Move joueur (filtre PC) ou move distant (mobs) |
+| **16** | Spawn lot peripherique (GetNearItems) |
+| **69** | Maj HP / apparence |
+| **70** | Despawn (`NPCManager::remove_npc`) |
+
+**Fichiers :** `T4CLoginSession.{cpp,h}`, `GameWorldScreen.{cpp,h}`, `client_graphical_sdl3_test/TnC_dev/NPCManager/npcmanager.{h,cpp}`, `cmake/TncGraphical.cmake`.
+
+---
+
+## 2026-05-21 — Opcode 1, apparence joueur, déplacement, skips WDA serveur
+
+### A. Opcode 1 : filtre unitId + apparence PC (`__EVENT_OBJECT_MOVED`)
+
+#### Symptôme
+
+En jeu, avec les **creatures WDA** chargées côté serveur (hives actives), les logs réseau montraient un **flood d’opcodes 1** (~2/s × nombre de mobs visibles) et des positions serveur qui **alternaient** entre deux zones éloignées (ex. `(2930,1049)` et `(2965,1082)`), alors que le joueur ne bougeait pas ou avançait normalement.
+
+**Effets visibles :** caméra / sprite joueur qui **sautait** d’une case à l’autre, `mapi_full_redraw` à chaque paquet, impression que le déplacement « ne correspond pas » au serveur.
+
+#### Cause
+
+Sur le **fil serveur → client**, l’opcode **1** n’est pas une « réponse à ton move nord » : c’est **`__EVENT_OBJECT_MOVED`** (`EventListing.h`) — le serveur **broadcast** ce paquet pour **chaque unité** qui se déplace dans la zone (~40 tiles) : joueur, mobs de hive, autres PCs.
+
+Format (après en-tête TFC + opcode) : `X`, `Y`, puis `PacketUnitInformation` (appearance, **unitId**, radiance, status, HP%).
+
+Le handler Linux **`ApplyServerUnitPosition`** (version initiale) lisait seulement `X`/`Y` (offsets 6–9) et appliquait la position à **`g_activePlayer`** + **`g_playerPopupPending`**, **sans comparer l’unitId**. Chaque mob qui patrouillait écrasait donc la position du joueur et déclenchait un `snapPlayerVisual()` dans `GameWorldScreen`.
+
+Ce bug n’apparaissait pas tant que **`T4C_SKIP_CREATURES=1`** masquait les spawns ; il devient visible dès que les creatures WDA tournent (362 unités), indépendamment du crash **`NPCs.WDA`** (PNJ scriptés — autre pipeline).
+
+#### Fix (v1 — filtre unitId)
+
+**`src/network/T4CLoginSession.cpp`** — `ApplyServerUnitPosition` :
+
+1. Lit **`unitId`** à l’offset 12 (`ReadBeInt32Msf`, comme `HandlePacketPopup`).
+2. Met à jour `g_activePlayer.serverX/Y` et pose `g_playerPopupPending` **uniquement si** `unitId == g_activePlayer.unitId`.
+3. Ignore silencieusement les mouvements des autres unités (mobs — affichage dédié à faire plus tard).
+4. Log phase renommé : `__EVENT_OBJECT_MOVED (1) — joueur @ …` seulement quand le paquet concerne le perso actif.
+
+**Insuffisant seul** — voir v2 ci-dessous.
+
+#### Symptôme résiduel (v1)
+
+Après v1 : plus de sauts entre deux zones éloignées, mais **perturbations** persistantes — logs `[PHASE] joueur @ …` sur des paquets dont l’apparence est **`0x4E26` (20006, creature)**, et le **vrai** ack joueur (`appearance 0x271B`, `unitId 4`) ignoré.
+
+Exemple filtré à tort : `… 0B 93 04 32 4E 26 00 10 0A DD …` (mob) passait car `g_activePlayer.unitId` valait **`0x00100ADD`** — id d’un mob, pas du PC.
+
+#### Cause racine (v2)
+
+L’opcode **10004** (`Unit::PacketPopup`) n’est **pas** réservé au joueur : le serveur l’envoie pour **toute unité** qui apparaît à portée (mobs, objets, autres PCs). **`HandlePacketPopup`** enregistrait le **premier** 10004 reçu comme perso actif → `unitId` et parfois position pris sur un **mob** (souvent même tile au spawn). Le filtre unitId v1 « fonctionnait » alors contre le mauvais id.
+
+#### Fix (v2 — apparence PC + re-apprentissage unitId)
+
+**`src/network/T4CLoginSession.cpp`** :
+
+1. **`IsPlayerUnitAppearance`** — 10001–10004, 15001–15004, 10011/10012 (puppet), 15011/15012 ; exclut creatures (≥ 20000).
+2. **`HandlePacketPopup`** — ne met à jour `g_activePlayer` que si apparence PC.
+3. **`ApplyServerUnitPosition`** — ignore si apparence non-PC ; **ré-apprend** `unitId` + apparence depuis le premier opcode 1 joueur si l’état était corrompu ; ignore si position inchangée (évite redraw spam).
+4. **`GameWorldScreen::Update`** — ne snap / ne relance pas la musique si position déjà identique (évite d’**annuler le glide** `move_to` quand l’ack serveur confirme la case prédite).
+
+**Fichiers modifiés :** `src/network/T4CLoginSession.cpp`, `src/game/GameWorldScreen.cpp`, `CHANGELOG.md`.
+
+**Lecture des logs :** les paquets `4E 26` (20006 = **brigand**, mob hive crypte LH / désert RF) ne sont **pas** ton personnage. Ton PC serveur = **`27 1B` (10011, puppet humain)** quand **tu** bouges.
+
+---
+
+### B. Apparence visuelle : « je suis un brigand » vs humain Windows
+
+#### Ce que tu vois à l’écran
+
+Le client Linux **ne dessinait pas** les mobs réseau avant 2026-05-21 (§ G). Il affichait **un seul** sprite : le tien, via **`NPCManager` + `NPCList.txt`**.
+
+| Couche | Windows 1.68 | Client Linux actuel |
+|--------|--------------|---------------------|
+| Apparence serveur | **10011** puppet (`__PLAYER_PUPPET`) | Idem (filtré réseau) |
+| Rendu visuel | Système **Puppet** + **VObject** : corps humain + équipement ; classes mappées ex. **10001 → 20043** (`__MONSTER_HUMAN_SWORDMAN`) | Sprite **NPCList** entier par classe |
+| Guerrier | Puppet composé (humain armé) | **`Warrio`** — nom exact dans `NPCList.txt` ligne 218 |
+
+#### Pourquoi « Warrio » et pas « Warrior » ?
+
+Ce n’est **pas** une faute de frappe : **`Warrio`** est le **nom canonique TnC/mestoph** dans `NPCList.txt` (sprites VSF `warrio180-a`, etc.). Le client Windows n’utilise pas ce nom — il passe par **`ObjectListing.h`** et des IDs **20xxx**. On ne peut pas renommer en « Warrior » sans ajouter une entrée NPCList + sprites correspondants.
+
+#### Pourquoi ça ressemble aux brigands (crypte LH, désert RF) ?
+
+Dans les assets TnC (`t4cgamefile.dec`), les sprites **`warrio*`** et **`BlackWarrior*`** coexistent ; l’art mestoph du guerrier NPCList est un **sprite monstre entier**, visuellement proche des humanoïdes hostiles ( brigands / BlackWarrior ) — **pas** le puppet humain cuirassé du client officiel.
+
+**Ce n’est pas** que le réseau te donne l’apparence 20006 : c’est une **limitation de rendu** (pas de Puppet / pas de map 10001→20043). Prochaine étape graphique : porter le rendu puppet ou mapper vers les VSF « Human Swordman » Windows.
+
+#### Fix court terme (2026-05-21)
+
+- **`T4CPlayerSpriteNpcName`** : classe depuis questionnaire création (`classIndex`) ou race 10001–10004, pas la race liste **10011** (puppet).
+- HUD monde : `app 10011 | Warrio` pour vérifier que le réseau dit bien puppet humain.
+
+---
+
+### C. Déplacement : régression et correctifs
+
+#### Symptôme (session 2026-05-21)
+
+Après les filtres opcode 1 : déplacement « catastrophique » — glide coupé, caméra qui lag, pas bloqué sur `is_moving` aussi longtemps.
+
+#### Causes
+
+1. **`snapPlayerVisual()` sur chaque ack opcode 1** (commit `6e38fda`) appelait `set_world_pos` **même quand la position serveur = position prédite** → annulation du glide en cours.
+2. **`kMoveVisualStepsMul = 15`** : ~120 frames par case ; `is_moving(0)` bloque le pas suivant très longtemps.
+3. **Caméra** (`locX_`/`locY_`) synchronisée seulement **à la fin** du glide, pas au début du pas.
+
+#### Correctifs appliqués
+
+| Fichier | Changement |
+|---------|------------|
+| `GameWorldScreen.cpp` | **`syncCameraToPlayer()`** dès qu’un pas local est accepté (carte défile tout de suite) |
+| `GameWorldScreen.cpp` | Snap serveur **uniquement si** `popup.serverX/Y ≠ playerX_/Y` (rollback mur / désync ; pas si ack = prédiction) |
+| `GameWorldScreen.h` | **`kMoveVisualStepsMul = 4`** (commit `6e38fda` avait 15) |
+
+Aligné sur l’intention du commit **`63fe2e2`** (glide TnC + opcodes 1–8), sans le snap systématique qui tuait l’animation.
+#### Itérations suivantes (toujours non commitées) — **mise en pause**
+
+| Changement | Effet |
+|------------|--------|
+| `set_world_pos(fromX, fromY)` avant chaque `move_to` | Moins de décalage sprite / coord internes NPCManager après un pas |
+| Caméra sur case de **départ** du glide (`moveStartX_/Y_`), resync à la fin | Carte moins « en retard » sur le glide |
+| File `pendingMoveOpcode_` + `KEY_UP` seulement si `!is_moving` | Touches maintenues moins bloquantes |
+| `kMoveVisualStepsMul = 2` (testé aussi 1 et 4) | Glide plus court ; moins de blocage `is_moving` |
+
+**État utilisateur (2026-05-21)** : nettement mieux qu'au début de session, mais **glitchs visuels restants** (saccades, jambes en marche à l'arrêt, effet de dédoublement) — surtout liés au coût **`mapi_full_redraw` ~18 ms** à chaque pas et à l'absence de rendu des **autres unités** opcode 1 (mobs). **Travail déplacement mis en pause** ; priorité **crash `NPCs.WDA` serveur** (§ F).
+
+**Prochaine piste move (quand reprise)** : invalidation partielle carte / throttle redraw, pas retoucher le filtre réseau opcode 1.
+
+
+---
+
+### D. Boot serveur WDA : ordre des phases et « NPCs corrigés tout seuls » ?
+
+> Détail serveur : `T4C_Server_Linux_Final_Step/CHANGELOG.md` entrée **2026-05-18 — Boot WDA**. Code : `TFCInit.cpp` (~l.1240–1320).
+
+#### Ordre réel du boot (après lecture Worlds + Edit)
+
+```text
+1. Définitions objets WDA          (stats, formules — toujours chargées)
+2. WDAInitObjects                  (pose ~2601 objets AU SOL)  ← T4C_SKIP_GROUND_OBJECTS
+3. Section creatures WDA           (CreateFrom ou SkipSection) ← T4C_SKIP_CREATURES
+4. WDAInitCreatures                (enregistre ~362 mobs)       ← sauté si skip creatures
+5. WDAInitNPC                      (NPCs.WDA — PNJ scriptés)   ← phase séparée !
+6. WDAInitHives                    (groupes de spawn / respawn)
+7. WDAInitAreaLinks
+8. WDAInitClans
+→ Server started
+```
+
+#### Deux skips **indépendants** (contournements dev, pas des fixes)
+
+| Variable | Phase contournée | Effet quand actif |
+|----------|------------------|-------------------|
+| **`T4C_SKIP_GROUND_OBJECTS=1`** | Étape **2** — boucle `create_world_unit` (~2601 objets sol ; obj. **106** @ 1601,2569 bloquait) | Pas d’objets **grounded** sur les cartes ; définitions (stats) OK |
+| **`T4C_SKIP_CREATURES=1`** | Étapes **3–4** — pas de `CreatureData` en RAM, pas de `WDAInitCreatures` | Pas de mobs enregistrés ; **hives** (étape 6) chargées quand même via `SkipSection` |
+
+Quand vous **retirez** un skip, le blocage revient **à cette phase-là**.
+
+#### « Ça plantait plus loin » — typiquement quoi ?
+
+- **Retrait `T4C_SKIP_GROUND_OBJECTS` seul** → blocage / freeze en **étape 2** (placement objets sol), pas pendant creatures.
+- **Retrait `T4C_SKIP_CREATURES` seul** → boot long ou blocage en **étape 3–4** (lecture `fgetc` octet par octet) ; puis mobs actifs en jeu si boot OK.
+- **Étape 5 NPCs** : parseur **`NPCs.WDA` crash toujours** au 1er NPC — **ce n’est pas réparé**.
+
+#### NPCs : **non**, ce n’est pas « corrigé tout seul »
+
+Dans `TFCInit.cpp`, `WDAInitNPC()` est dans un **`try { … } catch (…) { … continuing boot }`** :
+
+```text
+[BOOT] loading NPCs (NPCs.WDA)…
+[NPC] … crash parse 1er NPC …
+[WDAInit] WDAInitNPC FAILED — see [NPC] logs (creatures OK, continuing boot)…
+```
+
+Le serveur **attrape l’exception**, logue l’échec, et **continue** vers Hives / Area links / Clans. Donc :
+
+- **`Server started`** → oui, le boot peut finir  
+- **PNJ scriptés** (`NPCs.WDA` : marchands, quêtes, dialogues) → **non**, toujours absents  
+- **Brigands / mobs hive** → viennent des **creatures** (étapes 3–4), **pas** de `NPCs.WDA`
+
+Ce n’est pas une réparation automatique : c’est un **contournement** (ignorer l’échec NPC pour ne pas tuer tout le serveur). Aucun fix du parseur `NPCs.WDA` n’a été commité.
+
+#### Deux pipelines « NPC » à ne pas confondre
+
+| | **Creatures WDA** (étapes 3–4) | **NPCs.WDA** (étape 5) |
+|---|--------------------------------|-------------------------|
+| Fichier | `T4C Worlds.WDA` / `T4C Edit.WDA` | `NPCs.WDA` |
+| Contenu | Stats mobs, apparences 20xxx (brigand 20006…) | Scripts PNJ (INTL, quêtes, marchands) |
+| Skip / erreur | `T4C_SKIP_CREATURES` | **try/catch** — boot continue, NPCs non chargés |
+| État actuel | OK si skip retiré + LP64 | **Fix parseur appliqué — à valider en boot** |
+
+---
+
+### F. NPCs.WDA — diagnostic crash serveur (priorité 2026-05-21)
+
+| Étape | Résultat |
+|-------|----------|
+| Déchiffrement `tiforci/havoc2/NPCs.WDA` | `version=1`, `qty=51`, 1er NPC `creature=drunk`, arbre cohérent en Python |
+| Opcode `0x65a1000b` dans le fichier déchiffré | **Absent** → pas un opcode manquant dans l'enum, mais **lecture désalignée** |
+| Alignement binaire | Après `InsSayText` (11) : `nParams=1`, string 26 o, puis **`DWORD 1`**, puis opcode suivant (ex. `InsBreakConversation` 12) |
+| Code serveur | `CompositeInstruction::Load` ne consommait pas le `DWORD` trailer → fix ci-dessus |
+
+**Commit de référence client** : `6e38fda` (musique). Travail move + réseau + fix NPC serveur : **non commité** (validation **2026-05-25 23:03:07**).
+
+---
+
+### E. Audio (fix crash spawn — non documenté avant)
+
+**`src/audio/T4CGameMusic.cpp`** : `PlayTrackId` appelait `FreeWav` avant `CloseStream` → thread SDL audio lisait un buffer libéré → **SIGSEGV** au spawn. Fix : **`CloseStream` en premier**, puis `LoadWavFile`.
+
+---
+
+### G. Affichage monstres / unités distantes (réseau → NPCManager)
+
+#### Rôle de chaque couche (moteur vs client vs serveur)
+
+| Couche | Responsabilité | Cette mission |
+|--------|----------------|---------------|
+| **Serveur T4C** | État du monde, spawn creatures/hives, envoi paquets binaires | Inchangé — source de vérité (`Unit::PacketPopup`, `PacketUnitInformation` dans `Unit.cpp`) |
+| **Client réseau** (`T4CLoginSession.cpp`) | Décoder les opcodes, filtrer joueur local vs unités distantes, file d'événements thread-safe | **Nouveau** — voir opcodes ci-dessous |
+| **Client rendu** (`GameWorldScreen.cpp`) | Consommer la file, appeler `NPCManager` (id = `unitId` serveur, id 0 = joueur local) | **Nouveau** — `syncRemoteUnitsFromNetwork()` |
+| **Moteur TnC** (`NPCManager`) | Liste chaînée de sprites VSF, animation `move_to` / `draw_npc` | **`remove_npc(int id)`** ajouté — retrait propre à la despawn (opcode 70) ; **refuse id 0** (joueur) |
+
+Le moteur **ne parle pas au réseau** : il ne sait dessiner que des entrées `(id, nom NPCList, x, y)`. Le client Linux traduit le protocole T4C en appels moteur.
+
+#### OpCodes interceptés (alignés `Unit.cpp` + `EventListing.h`)
+
+Lecture **octet par octet BE** (`ReadBeUint16`, `ReadBeInt32Msf`) — **pas** de `struct` packée (évite padding GCC ≠ Windows).
+
+| Opcode | Nom | Payload après en-tête TFC (6 o) | Action client |
+|--------|-----|----------------------------------|---------------|
+| **10004** | `Unit::PacketPopup` | `short X, Y` + `PacketUnitInformation` | Joueur local si apparence PC **et** `unitId` = perso ; sinon **spawn distant** |
+| **1** | `__EVENT_OBJECT_MOVED` | `X, Y` + `PacketUnitInformation` | Joueur local (filtre v2 inchangé) ; sinon **move distant** |
+| **16** | `__EVENT_OBJECT_APPEARED_LIST` | `short count` puis × N `(X, Y + UnitInformation)` | **Spawn lot** (réponse peripherique / GetNearItems) |
+| **69** | `RQ_UnitUpdate` | `PacketUnitInformation` seul | **Maj** HP / apparence (pas de position) |
+| **70** | `RQ_MissingUnit` | `long unitId` | **Despawn** (`remove_npc`) |
+
+**Corrections par rapport au cahier des charges initial :**
+
+- **10004 n'est pas un `RQ_*`** de `TFC_MAIN.h` — type filaire aussi utilisé pour objets au sol ; seules les apparences drawable (`IsRemoteDrawableUnit`) sont instanciées.
+- **Le mouvement des mobs passe par l'opcode 1**, pas par 69 seul.
+- **Le spawn initial en zone** arrive surtout via **opcode 16**, pas seulement 10004.
+
+#### Mapping apparence → sprite NPCList
+
+`T4CSpriteNameFromAppearance()` — table partielle (20006 → `BlackWarrior`, 20003 → `Rat`, PCs → classes). Inconnus → **`BlackWarrior`**. Évolution : table complète depuis `ObjectListing.h`.
+
+#### Fichiers modifiés
+
+| Fichier | Changement |
+|---------|------------|
+| `src/network/T4CLoginSession.{h,cpp}` | File `T4CRemoteUnitEvent`, handlers 10004/1/16/69/70 |
+| `src/game/GameWorldScreen.{h,cpp}` | `syncRemoteUnitsFromNetwork`, clear au teleport |
+| `client_graphical_sdl3_test/TnC_dev/NPCManager/npcmanager.{h,cpp}` | **`remove_npc`** |
+
+**Régression évitée :** filtres joueur sur opcode **1** et **10004** conservés ; chemin parallèle pour unités distantes.
+
+#### 2026-05-21 — Moteur : `client_graphical_sdl3_test` autonome (fin des symlinks)
+
+Les 9 symlinks `TnC_dev/` → `client_graphical_path_to_follow` ont été remplacés par des **copies réelles** dans `client_graphical_sdl3_test/TnC_dev/` (`FontManager`, `VSFInterface`, `NPCManager`, `TextManager`, `fonts`, assets). Le moteur SDL3 patché (dont `remove_npc`) vit désormais **uniquement** dans sdl3_test. `client_graphical_path_to_follow` a été **restauré** (`git checkout`) en état témoin vierge.
+
+#### Fix regression déplacement / téléport
+
+> **Horodatage détaillé :** entrée **2026-05-25** en tête de ce CHANGELOG (`22:52:10` régression, `23:03:07` validation).
+
+Les paquets opcode **1** avec `app=0x4E26` (20006, brigand) restent routés vers les unités distantes uniquement.
+
+---
+
+**Fichiers touchés (session 2026-05-21 → 2026-05-25, non commités — validation 2026-05-25 23:03:07) :**  
+`src/network/T4CLoginSession.cpp`, `src/network/T4CLoginSession.h`, `src/game/GameWorldScreen.cpp`, `src/game/GameWorldScreen.h`, `src/audio/T4CGameMusic.cpp`, `client_graphical_sdl3_test/TnC_dev/NPCManager/npcmanager.{h,cpp}`, `CHANGELOG.md`.
+
 ---
 
 ## 2026-05-20 — Musique de fond (GameMusic → SDL3 audio)
@@ -772,8 +1200,10 @@ Voir section **2026-05-20** ci-dessus. Avant ce commit : pas de handler 57, pas 
 
 #### Serveur (`T4C_Server_Linux_Final_Step`, hors dépôt client)
 
-- [ ] **Démarrer sans workarounds de boot** : retirer ou rendre optionnels les contournements actuels (**skip creature**, **skip ground object**, **éjection / retrait NPC WDA** ou chargement NPCs.WDA dégradé) une fois le chargement WDA 1.68 LP64 stable (`second_approach/`, `key_swaps/`).
-- [ ] Valider **WDA Worlds + Edit + NPCs** avec la bonne clé XOR 1.68 (LCG) et structures LP64 — le client en dépend indirectement (collisions, spawns, refus de move).
+→ **Détail complet : section [BACKLOG — Pipeline WDA](#backlog--pipeline-wda-skips-serveur-assets-documenté-2026-05-20--à-revoir-plus-tard)** en tête de ce CHANGELOG.
+
+- [ ] **Démarrer sans workarounds de boot** : retirer `T4C_SKIP_GROUND_OBJECTS` / `T4C_SKIP_CREATURES` (voir BACKLOG).
+- [ ] Valider **WDA Worlds + Edit + NPCs** LP64 + perf `WDAFile`.
 
 #### Client — réseau (`T4CLoginSession`)
 
@@ -804,7 +1234,7 @@ Voir section **2026-05-20** ci-dessus. Avant ce commit : pas de handler 57, pas 
 
 - [ ] MOTD opcodes **65** / **66** (cosmétique login).
 - [ ] CI Linux : build + smoke handshake UDP (trace `debug/t4c_network_session.log`).
-- [ ] Commits séparés : `key_swaps/`, `second_approach/` (outils WDA, pas le runtime client).
+- [ ] Commits séparés : voir checklist **BACKLOG** (`second_approach/`, `key_swaps/` — specs txt oui, binaires non).
 
 ---
 

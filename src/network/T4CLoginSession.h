@@ -39,8 +39,10 @@ struct T4CActivePlayer {
     std::uint16_t race{0};
     /** Niveau connu (opcode 26 a la selection ; maj future opcode 43). */
     std::uint16_t level{0};
-    /** ID apparence serveur (10001–10004 mâle, 15001–15004 femelle). 0 = déduire de race. */
+    /** ID apparence serveur (10001–10004 mâle, 15001–15004 femelle, 10011/10012 puppet). */
     std::uint16_t appearance{0};
+    /** Classe 0–3 (Warrio/Wizard/Cleric/Thief) — questionnaire creation ou race 10001–10004. */
+    std::uint8_t classIndex{0};
     unsigned int serverX{0};
     unsigned int serverY{0};
     std::int32_t unitId{0};
@@ -173,6 +175,32 @@ bool T4CLoginSessionSendMove(std::uint16_t moveOpcode);
 
 /** Met a jour les coords affichees du perso actif (apres mouvement local). */
 void T4CLoginSessionUpdateActivePlayerPosition(unsigned int x, unsigned int y);
+
+/** Evenement reseau → rendu : spawn / deplacement / maj stats / despawn d'une unite distante. */
+enum class T4CRemoteUnitEventKind : std::uint8_t {
+    Spawn,
+    Move,
+    Update,
+    Remove,
+};
+
+struct T4CRemoteUnitEvent {
+    T4CRemoteUnitEventKind kind{T4CRemoteUnitEventKind::Spawn};
+    std::int32_t unitId{0};
+    std::uint16_t appearance{0};
+    unsigned int x{0};
+    unsigned int y{0};
+    char hpPercent{0};
+};
+
+/** Vide la file d'evenements unites distantes (thread-safe, depuis la boucle GameWorld). */
+void T4CLoginSessionDrainRemoteUnitEvents(std::vector<T4CRemoteUnitEvent> *outEvents);
+
+/** Nom NPCList / VSF pour une apparence serveur (20006 → BlackWarrior, etc.). */
+const char *T4CSpriteNameFromAppearance(std::uint16_t appearance);
+
+/** Reinitialise la file (logout, teleport, retour login). */
+void T4CLoginSessionClearRemoteUnits();
 
 /** @deprecated Utiliser ConsumeCharacterListReady + flux selection. */
 bool T4CLoginSessionConsumeNetworkSuccessDialog();

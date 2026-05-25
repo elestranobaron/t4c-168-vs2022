@@ -4,6 +4,9 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "Sdl3FramePresenter.h"
 
@@ -52,7 +55,7 @@ class GameWorldScreen {
     /** Vitesse move_to TnC (plus grand = plus rapide). */
     static constexpr unsigned short kMoveVisualSpeed = 4;
     /** Frames par case (~32*mul/speed) ; depl ralenti en meme temps dans move_to. */
-    static constexpr unsigned short kMoveVisualStepsMul = 15;
+    static constexpr unsigned short kMoveVisualStepsMul = 2;
 
     static char *DupCStr(const std::string &s);
 
@@ -61,8 +64,13 @@ class GameWorldScreen {
     void snapPlayerVisual(unsigned int x, unsigned int y);
     void setPlayerFacingFromDelta(int dx, int dy);
     void setPlayerWalkAnim(bool walking);
+    /** 0 si aucune touche de deplacement. */
+    std::uint16_t heldMoveOpcode() const;
+    void applyServerPlayerPosition(unsigned int x, unsigned int y);
     void pollHeldMovement();
     bool tryMovePlayer(std::uint16_t moveOpcode);
+    void clearRemoteUnits();
+    void syncRemoteUnitsFromNetwork();
     void drawOptionsPopup();
     bool handleSideMenuKey(const SDL_Event &event);
     bool handleOptionsPopupKey(const SDL_Event &event);
@@ -88,6 +96,10 @@ class GameWorldScreen {
     unsigned int locY_{1083};
     unsigned int playerX_{2880};
     unsigned int playerY_{1083};
+    std::uint16_t pendingMoveOpcode_{0};
+    bool awaitingServerMove_{false};
+    Uint32 awaitingServerMoveSince_{0};
+    bool wasMoving_{false};
     unsigned short zone_{0};
     bool mapFlag_{true};
     bool dispInfos_{false};
@@ -98,6 +110,8 @@ class GameWorldScreen {
     int optionsSelection_{0};
     WorldSideMenu sideMenu_;
     bool playerNpcSpawned_{false};
+    std::unordered_set<std::int32_t> remoteUnitIds_;
+    std::unordered_map<std::int32_t, std::pair<unsigned int, unsigned int>> remotePositions_;
     float fps_{0.f};
     std::string dataRoot_;
     std::string lastError_;

@@ -1,8 +1,8 @@
 # Sources TnC (mestoph) SDL3 natif — code compile dans t4c_client (≠ T4C_DATA runtime).
 #
 # Ordre de priorite a chaque configure :
-#   1. client_graphical_sdl3_test/TnC_dev                — TnC patche SDL3 (compile)
-#   2. client_graphical_path_to_follow/decode/TnC_dev    — labo mestoph (fallback)
+#   1. client_graphical_sdl3_test/TnC_dev                — moteur SDL3 (sources reelles, sans symlink)
+#   2. client_graphical_path_to_follow/decode/TnC_dev    — temoin / labo mestoph (fallback si sdl3_test absent)
 set(_TNC_ROOT_CANDIDATES
     "${CMAKE_SOURCE_DIR}/../client_graphical_sdl3_test/TnC_dev"
     "${CMAKE_SOURCE_DIR}/../client_graphical_path_to_follow/decode/TnC_dev"
