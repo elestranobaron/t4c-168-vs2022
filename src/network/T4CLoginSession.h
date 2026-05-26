@@ -1,5 +1,7 @@
 #pragma once
 
+#include "network/T4CPlayerInventory.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -188,6 +190,22 @@ bool T4CLoginSessionConsumePlayerStatusUpdate(T4CPlayerStatus *outStatus);
 
 /** Demande explicite RQ_GetStatus (43) — refresh cote serveur. */
 bool T4CLoginSessionRequestPlayerStatus();
+
+/** Inventaire / skills / sorts / coffre banque (opcodes 18, 39, 62, 106). */
+void T4CLoginSessionGetBackpack(T4CPlayerBackpack *out);
+void T4CLoginSessionGetSkillBook(T4CPlayerSkillBook *out);
+void T4CLoginSessionGetSpellBook(T4CPlayerSpellBook *out);
+void T4CLoginSessionGetBankChest(T4CPlayerBankChest *out);
+
+/** True une fois apres maj inventaire, skills, sorts ou coffre. */
+bool T4CLoginSessionConsumeInventoryUpdate();
+
+bool T4CLoginSessionRequestSkillList();
+bool T4CLoginSessionRequestSpellList();
+bool T4CLoginSessionRequestViewBackpack();
+
+/** Coffre banque visible (opcode 109/110). */
+bool T4CLoginSessionIsBankChestUiVisible();
 
 /** True une fois par nouveau PacketPopup 10004 (position / apparence serveur). */
 bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *outPlayer);

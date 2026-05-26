@@ -50,6 +50,8 @@ class CharacterSelectScreen {
     bool confirmDelete_{false};
     std::string pendingDeleteName_;
     int selectedIndex_{0};
+    Uint64 lastCharClickMs_{0};
+    int lastCharClickRow_{-1};
     std::vector<std::string> displayLines_;
     std::string statusLine_;
     bool statusLocked_{false};

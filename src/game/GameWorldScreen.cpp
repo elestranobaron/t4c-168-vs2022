@@ -64,6 +64,22 @@ void drawStatusBar(SDL_Surface *dest, FontManager *fm, int x, int y, int w, int 
     blitText(fm, dest, x + 4, y + 1, buf, 0xFFFFFFFF);
 }
 
+void appendBagLines(const std::vector<T4CBagItem> &items, std::vector<std::string> *lines) {
+    if (!lines) {
+        return;
+    }
+    if (items.empty()) {
+        lines->push_back("(vide)");
+        return;
+    }
+    for (const T4CBagItem &it : items) {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "app %u id %d x%u chg %d", static_cast<unsigned>(it.appearance),
+                      static_cast<int>(it.objectId), static_cast<unsigned>(it.qty), static_cast<int>(it.charges));
+        lines->push_back(buf);
+    }
+}
+
 int facingDegreesFromDelta(const int dx, const int dy) {
     if (dx == 1 && dy == 0) {
         return 270;
@@ -374,6 +390,7 @@ void GameWorldScreen::syncRemoteUnitsFromNetwork() {
 }
 
 void GameWorldScreen::Shutdown() {
+    freeCharacterPanelCache();
     ready_ = false;
     playerNpcSpawned_ = false;
     remoteUnitIds_.clear();
@@ -494,7 +511,7 @@ void GameWorldScreen::applyServerPlayerPosition(const unsigned int x, const unsi
 }
 
 std::uint16_t GameWorldScreen::heldMoveOpcode() const {
-    if (sideMenu_.isOpen() || optionsPopupOpen_) {
+    if (sideMenu_.isOpen() || optionsPopupOpen_ || characterPanel_ != 0) {
         return 0;
     }
     const bool *const keys = SDL_GetKeyboardState(nullptr);
@@ -610,6 +627,10 @@ void GameWorldScreen::redraw() {
     }
 #endif
 
+    if (characterPanel_ != 0) {
+        drawCharacterPanel();
+    }
+
     if (sideMenu_.isOpen()) {
         sideMenu_.draw(screen_);
     }
@@ -660,6 +681,18 @@ void GameWorldScreen::Update() {
     pollHeldMovement();
 
     syncRemoteUnitsFromNetwork();
+
+#if defined(LINUX_PORT)
+    if (T4CLoginSessionConsumeInventoryUpdate()) {
+        panelCacheDirty_ = true;
+        if (T4CLoginSessionIsBankChestUiVisible()) {
+            characterPanel_ = 4;
+        }
+    }
+    if (characterPanel_ != 0 && panelCacheDirty_) {
+        rebuildCharacterPanelCache();
+    }
+#endif
 
     if (playerNpcSpawned_ && npcm_) {
         const bool moving = npcm_->is_moving(0);
@@ -782,6 +815,181 @@ bool GameWorldScreen::handleSideMenuKey(const SDL_Event &event) {
     return true;
 }
 
+void GameWorldScreen::freeCharacterPanelCache() {
+    if (panelTitleSurf_) {
+        SDL_DestroySurface(panelTitleSurf_);
+        panelTitleSurf_ = nullptr;
+    }
+    if (panelFooterSurf_) {
+        SDL_DestroySurface(panelFooterSurf_);
+        panelFooterSurf_ = nullptr;
+    }
+    for (CharacterPanelGlyph &g : panelGlyphs_) {
+        if (g.surface) {
+            SDL_DestroySurface(g.surface);
+            g.surface = nullptr;
+        }
+    }
+    panelGlyphs_.clear();
+    panelCacheDirty_ = true;
+}
+
+void GameWorldScreen::toggleCharacterPanel(const int kind, const bool forceRefresh) {
+    if (characterPanel_ == kind) {
+        characterPanel_ = 0;
+        freeCharacterPanelCache();
+        return;
+    }
+    characterPanel_ = kind;
+    panelCacheDirty_ = true;
+#if defined(LINUX_PORT)
+    if (kind == 1) {
+        T4CPlayerBackpack bp{};
+        T4CLoginSessionGetBackpack(&bp);
+        if (forceRefresh || !bp.valid) {
+            T4CLoginSessionRequestViewBackpack();
+        }
+    } else if (kind == 2) {
+        T4CPlayerSkillBook book{};
+        T4CLoginSessionGetSkillBook(&book);
+        if (forceRefresh || !book.valid) {
+            T4CLoginSessionRequestSkillList();
+        }
+    } else if (kind == 3) {
+        T4CPlayerSpellBook book{};
+        T4CLoginSessionGetSpellBook(&book);
+        if (forceRefresh || !book.valid) {
+            T4CLoginSessionRequestSpellList();
+        }
+    }
+#else
+    (void)forceRefresh;
+#endif
+}
+
+void GameWorldScreen::rebuildCharacterPanelCache() {
+#if defined(LINUX_PORT)
+    freeCharacterPanelCache();
+    panelCacheDirty_ = false;
+    if (!fm_ || characterPanel_ == 0) {
+        return;
+    }
+
+    std::vector<std::string> lines;
+    const char *title = "?";
+    if (characterPanel_ == 1) {
+        title = "Sac a dos (18)";
+        T4CPlayerBackpack bp{};
+        T4CLoginSessionGetBackpack(&bp);
+        appendBagLines(bp.items, &lines);
+    } else if (characterPanel_ == 2) {
+        title = "Skills (39)";
+        T4CPlayerSkillBook book{};
+        T4CLoginSessionGetSkillBook(&book);
+        if (book.skills.empty()) {
+            lines.emplace_back("(aucun skill — Maj+K pour refresh)");
+        } else {
+            for (const T4CPlayerSkill &sk : book.skills) {
+                char buf[160];
+                std::snprintf(buf, sizeof(buf), "%s (%u) %u/%u", sk.name.c_str(),
+                              static_cast<unsigned>(sk.skillId), static_cast<unsigned>(sk.points),
+                              static_cast<unsigned>(sk.truePoints));
+                lines.push_back(buf);
+            }
+        }
+    } else if (characterPanel_ == 3) {
+        title = "Sorts (62)";
+        T4CPlayerSpellBook book{};
+        T4CLoginSessionGetSpellBook(&book);
+        char hdr[64];
+        std::snprintf(hdr, sizeof(hdr), "Mana %u/%u", static_cast<unsigned>(book.mana),
+                      static_cast<unsigned>(book.maxMana));
+        lines.emplace_back(hdr);
+        if (book.spells.empty()) {
+            lines.emplace_back("(aucun sort — Maj+P pour refresh)");
+        } else {
+            for (const T4CPlayerSpell &sp : book.spells) {
+                char buf[160];
+                std::snprintf(buf, sizeof(buf), "%s (%u) cout %u niv %u", sp.name.c_str(),
+                              static_cast<unsigned>(sp.spellId), static_cast<unsigned>(sp.manaCost),
+                              static_cast<unsigned>(sp.level));
+                lines.push_back(buf);
+            }
+        }
+    } else if (characterPanel_ == 4) {
+        title = "Coffre banque (106)";
+        T4CPlayerBankChest chest{};
+        T4CLoginSessionGetBankChest(&chest);
+        appendBagLines(chest.items, &lines);
+    }
+
+    constexpr int panelW = 420;
+    constexpr int lineH = 16;
+    const int maxLines = 18;
+    const int shown = static_cast<int>(std::min(lines.size(), static_cast<std::size_t>(maxLines)));
+    const int panelH = 28 + shown * lineH + 24;
+    panelRect_ = SDL_Rect{kLogicalWidth - panelW - 12, 48, panelW, panelH};
+
+    if (panelTitleSurf_ = fm_->get_text(const_cast<char *>(title), 0xFFCCDDFF)) {
+        /* keep */
+    }
+    int y = panelRect_.y + 26;
+    for (int i = 0; i < shown; ++i) {
+        CharacterPanelGlyph g{};
+        g.x = panelRect_.x + 8;
+        g.y = y;
+        if (SDL_Surface *s = fm_->get_text(const_cast<char *>(lines[static_cast<std::size_t>(i)].c_str()), 0xFFE8E8E8)) {
+            g.surface = s;
+            panelGlyphs_.push_back(g);
+        }
+        y += lineH;
+    }
+    if (static_cast<int>(lines.size()) > shown) {
+        char more[48];
+        std::snprintf(more, sizeof(more), "... +%zu", lines.size() - static_cast<std::size_t>(shown));
+        CharacterPanelGlyph g{};
+        g.x = panelRect_.x + 8;
+        g.y = y;
+        if (SDL_Surface *s = fm_->get_text(more, 0xFFAAAAAA)) {
+            g.surface = s;
+            panelGlyphs_.push_back(g);
+        }
+    }
+    panelFooterSurf_ = fm_->get_text(
+        const_cast<char *>("B sac K skills P sorts U coffre Esc ferme | Maj+B/K/P refresh"), 0xFF888888);
+#else
+    panelCacheDirty_ = false;
+#endif
+}
+
+void GameWorldScreen::drawCharacterPanel() {
+#if defined(LINUX_PORT)
+    if (!screen_ || characterPanel_ == 0) {
+        return;
+    }
+    TnC_FillArgb(screen_, &panelRect_, 0xD0182030);
+    if (panelTitleSurf_) {
+        SDL_Rect dst{panelRect_.x + 8, panelRect_.y + 6, static_cast<int>(panelTitleSurf_->w),
+                     static_cast<int>(panelTitleSurf_->h)};
+        SDL_BlitSurface(panelTitleSurf_, nullptr, screen_, &dst);
+    }
+    for (const CharacterPanelGlyph &g : panelGlyphs_) {
+        if (!g.surface) {
+            continue;
+        }
+        SDL_Rect dst{g.x, g.y, static_cast<int>(g.surface->w), static_cast<int>(g.surface->h)};
+        SDL_BlitSurface(g.surface, nullptr, screen_, &dst);
+    }
+    if (panelFooterSurf_) {
+        SDL_Rect dst{panelRect_.x + 8, panelRect_.y + panelRect_.h - 18, static_cast<int>(panelFooterSurf_->w),
+                     static_cast<int>(panelFooterSurf_->h)};
+        SDL_BlitSurface(panelFooterSurf_, nullptr, screen_, &dst);
+    }
+#else
+    (void)0;
+#endif
+}
+
 bool GameWorldScreen::handleSideMenuMouse(const SDL_Event &event) {
     SDL_Event ev = event;
     if (renderer_) {
@@ -873,6 +1081,24 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
         return handleSideMenuKey(event);
     }
 
+    if (characterPanel_ != 0 && keyPressed(event, SDLK_ESCAPE, SDL_SCANCODE_ESCAPE)) {
+        characterPanel_ = 0;
+        freeCharacterPanelCache();
+        return true;
+    }
+
+    if (event.key.repeat) {
+        switch (event.key.key) {
+            case SDLK_B:
+            case SDLK_K:
+            case SDLK_P:
+            case SDLK_U:
+                return true;
+            default:
+                break;
+        }
+    }
+
     if (keyPressed(event, SDLK_F4, SDL_SCANCODE_F4)) {
         float b = presenter_.brightnessScale() - 0.1f;
         clampBrightness(b);
@@ -908,6 +1134,24 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
         case SDLK_F12:
             SDL_SaveBMP(screen_, "screen_world.bmp");
             break;
+        case SDLK_B: {
+            const bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+            toggleCharacterPanel(1, shift);
+            return true;
+        }
+        case SDLK_K: {
+            const bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+            toggleCharacterPanel(2, shift);
+            return true;
+        }
+        case SDLK_P: {
+            const bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+            toggleCharacterPanel(3, shift);
+            return true;
+        }
+        case SDLK_U:
+            toggleCharacterPanel(4, false);
+            return true;
         default:
             break;
     }

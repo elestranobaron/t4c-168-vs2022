@@ -104,6 +104,12 @@ static std::mutex g_activePlayerMutex;
 static T4CPlayerStatus g_playerStatus{};
 static std::mutex g_playerStatusMutex;
 static std::atomic<bool> g_playerStatusPending{false};
+static T4CPlayerBackpack g_backpack{};
+static T4CPlayerSkillBook g_skillBook{};
+static T4CPlayerSpellBook g_spellBook{};
+static T4CPlayerBankChest g_bankChest{};
+static std::mutex g_inventoryMutex;
+static std::atomic<bool> g_inventoryPending{false};
 /** Classe derivee du questionnaire (opcode 25), cle = nom perso. */
 static std::unordered_map<std::string, std::uint8_t> g_characterClassByName;
 static std::atomic<bool> g_playerPopupPending{false};
@@ -209,6 +215,225 @@ static std::uint64_t ReadBeInt64Msf(const unsigned char *d, int off, int len) {
     const std::uint64_t hi = static_cast<std::uint64_t>(static_cast<std::uint32_t>(ReadBeInt32Msf(d, off, len)));
     const std::uint64_t lo = static_cast<std::uint64_t>(static_cast<std::uint32_t>(ReadBeInt32Msf(d, off + 4, len)));
     return (hi << 32) | lo;
+}
+
+static std::uint16_t ReadBeUint16(const unsigned char *d, int off, int len);
+
+static constexpr std::uint16_t kMaxTfcStringLen = 256;
+static constexpr std::uint16_t kMaxInventoryListCount = 128;
+
+static bool ReadTfcString(const unsigned char *data, int len, int &off, std::string *out) {
+    if (!data || !out || off + 2 > len) {
+        return false;
+    }
+    const std::uint16_t slen = ReadBeUint16(data, off, len);
+    off += 2;
+    if (slen > kMaxTfcStringLen || off + slen > len) {
+        return false;
+    }
+    out->assign(reinterpret_cast<const char *>(data + off), slen);
+    off += slen;
+    return true;
+}
+
+static void MarkInventoryUpdated() {
+    g_inventoryPending.store(true);
+}
+
+static bool ParseBagItemList(const unsigned char *data, int len, int &off, std::vector<T4CBagItem> *out) {
+    if (!data || !out || off + 2 > len) {
+        return false;
+    }
+    const std::uint16_t countRaw = ReadBeUint16(data, off, len);
+    off += 2;
+    const unsigned count = std::min<unsigned>(countRaw, kMaxInventoryListCount);
+    out->clear();
+    out->reserve(count);
+    for (unsigned i = 0; i < count; ++i) {
+        if (off + 20 > len) {
+            return false;
+        }
+        T4CBagItem it{};
+        it.appearance = ReadBeUint16(data, off, len);
+        off += 2;
+        it.objectId = ReadBeInt32Msf(data, off, len);
+        off += 4;
+        it.baseId = ReadBeUint16(data, off, len);
+        off += 2;
+        const std::int32_t qty = ReadBeInt32Msf(data, off, len);
+        off += 4;
+        it.qty = qty < 0 ? 0u : static_cast<std::uint32_t>(qty);
+        it.charges = ReadBeInt32Msf(data, off, len);
+        off += 4;
+        out->push_back(it);
+    }
+    return true;
+}
+
+static void HandleViewBackpack(const unsigned char *data, int len) {
+    if (len < 13) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn, "[PHASE] RQ_ViewBackpack (18) tronque (%d octets).", len);
+        return;
+    }
+    int off = 6;
+    T4CPlayerBackpack bp{};
+    bp.showUi = data[off] != 0;
+    ++off;
+    bp.containerId = ReadBeInt32Msf(data, off, len);
+    off += 4;
+    if (!ParseBagItemList(data, len, off, &bp.items)) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
+                               "[PHASE] RQ_ViewBackpack (18) liste objets tronquee (%d octets).", len);
+        return;
+    }
+    bp.valid = true;
+    {
+        std::lock_guard<std::mutex> lock(g_inventoryMutex);
+        g_backpack = bp;
+    }
+    MarkInventoryUpdated();
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_ViewBackpack (18) — %zu objet(s), containerId=%d, show=%d.",
+                           bp.items.size(), static_cast<int>(bp.containerId), bp.showUi ? 1 : 0);
+}
+
+static void HandleGetSkillList(const unsigned char *data, int len) {
+    if (len < 8) {
+        return;
+    }
+    int off = 6;
+    const std::uint16_t countRaw = ReadBeUint16(data, off, len);
+    off += 2;
+    const unsigned count = std::min<unsigned>(countRaw, kMaxInventoryListCount);
+    T4CPlayerSkillBook book{};
+    book.skills.reserve(count);
+    for (unsigned i = 0; i < count; ++i) {
+        if (off + 7 > len) {
+            break;
+        }
+        T4CPlayerSkill sk{};
+        sk.skillId = ReadBeUint16(data, off, len);
+        off += 2;
+        sk.useMode = static_cast<unsigned char>(data[off++]);
+        sk.points = ReadBeUint16(data, off, len);
+        off += 2;
+        sk.truePoints = ReadBeUint16(data, off, len);
+        off += 2;
+        if (!ReadTfcString(data, len, off, &sk.name) || !ReadTfcString(data, len, off, &sk.description)) {
+            T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
+                                   "[PHASE] RQ_GetSkillList (39) skill %u tronquee.", static_cast<unsigned>(i));
+            break;
+        }
+        book.skills.push_back(std::move(sk));
+    }
+    book.valid = !book.skills.empty();
+    {
+        std::lock_guard<std::mutex> lock(g_inventoryMutex);
+        g_skillBook = book;
+    }
+    MarkInventoryUpdated();
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] RQ_GetSkillList (39) — %zu skill(s).",
+                           book.skills.size());
+}
+
+static void HandleSendSpellList(const unsigned char *data, int len) {
+    if (len < 13) {
+        return;
+    }
+    int off = 6;
+    /* bUpdate */ ++off;
+    T4CPlayerSpellBook book{};
+    book.mana = ReadBeUint16(data, off, len);
+    off += 2;
+    book.maxMana = ReadBeUint16(data, off, len);
+    off += 2;
+    const std::uint16_t countRaw = ReadBeUint16(data, off, len);
+    off += 2;
+    const unsigned count = std::min<unsigned>(countRaw, kMaxInventoryListCount);
+    book.spells.reserve(count);
+    for (unsigned i = 0; i < count; ++i) {
+        if (off + 2 > len) {
+            break;
+        }
+        const std::uint16_t spellId = ReadBeUint16(data, off, len);
+        off += 2;
+        if (spellId == 0) {
+            continue;
+        }
+        T4CPlayerSpell sp{};
+        sp.spellId = spellId;
+        if (off + 19 > len) {
+            break;
+        }
+        sp.targetType = static_cast<unsigned char>(data[off++]);
+        sp.manaCost = ReadBeUint16(data, off, len);
+        off += 2;
+        sp.duration = ReadBeInt32Msf(data, off, len);
+        off += 4;
+        sp.level = ReadBeUint16(data, off, len);
+        off += 2;
+        sp.element = ReadBeUint16(data, off, len);
+        off += 2;
+        sp.damageType = ReadBeUint16(data, off, len);
+        off += 2;
+        sp.icon = ReadBeInt32Msf(data, off, len);
+        off += 4;
+        if (!ReadTfcString(data, len, off, &sp.description) || !ReadTfcString(data, len, off, &sp.name)) {
+            T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
+                                   "[PHASE] RQ_SendSpellList (62) sort %u tronque.", static_cast<unsigned>(spellId));
+            break;
+        }
+        book.spells.push_back(std::move(sp));
+    }
+    book.valid = true;
+    {
+        std::lock_guard<std::mutex> lock(g_inventoryMutex);
+        g_spellBook = book;
+    }
+    MarkInventoryUpdated();
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] RQ_SendSpellList (62) — %zu sort(s), mana %u/%u.",
+                           book.spells.size(), static_cast<unsigned>(book.mana), static_cast<unsigned>(book.maxMana));
+}
+
+static void HandleChestContents(const unsigned char *data, int len) {
+    if (len < 8) {
+        return;
+    }
+    int off = 6;
+    T4CPlayerBankChest chest{};
+    chest.uiVisible = true;
+    if (!ParseBagItemList(data, len, off, &chest.items)) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn, "[PHASE] RQ_ChestContents (106) tronque (%d octets).", len);
+        return;
+    }
+    chest.valid = true;
+    {
+        std::lock_guard<std::mutex> lock(g_inventoryMutex);
+        g_bankChest = chest;
+    }
+    MarkInventoryUpdated();
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] RQ_ChestContents (106) — %zu objet(s) coffre banque.",
+                           chest.items.size());
+}
+
+static void HandleShowChest() {
+    {
+        std::lock_guard<std::mutex> lock(g_inventoryMutex);
+        g_bankChest.uiVisible = true;
+    }
+    MarkInventoryUpdated();
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] RQ_ShowChest (109) — UI coffre banque.");
+}
+
+static void HandleHideChest() {
+    {
+        std::lock_guard<std::mutex> lock(g_inventoryMutex);
+        g_bankChest.uiVisible = false;
+        g_bankChest.items.clear();
+        g_bankChest.valid = false;
+    }
+    MarkInventoryUpdated();
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] RQ_HideChest (110) — fermeture coffre banque.");
 }
 
 static std::uint16_t ReadBeUint16(const unsigned char *d, int off, int len) {
@@ -511,6 +736,8 @@ static void SetDeletePlayerError(unsigned char code) {
     g_deletePlayerErrorMessage = buf;
 }
 
+static void ResetInventoryStateLocked();
+
 static void ResetInGameClientStateAfterForcedExit() {
     g_pendingEnterWorld.store(false);
     g_pendingPost13Pipeline.store(false);
@@ -530,6 +757,16 @@ static void ResetInGameClientStateAfterForcedExit() {
         g_playerStatus = {};
     }
     g_playerStatusPending.store(false);
+    ResetInventoryStateLocked();
+}
+
+static void ResetInventoryStateLocked() {
+    std::lock_guard<std::mutex> lock(g_inventoryMutex);
+    g_backpack = {};
+    g_skillBook = {};
+    g_spellBook = {};
+    g_bankChest = {};
+    g_inventoryPending.store(false);
 }
 
 static void SendExitGameLocked() {
@@ -600,6 +837,35 @@ static void SendGetNearItemsLocked() {
     const auto pkt = BuildOpcodeOnlyPacket(static_cast<std::uint16_t>(RQ_GetNearItems));
     SendToServerLocked(pkt);
     T4CNetworkDebugLog("[UDP] -> RQ_GetNearItems (60).");
+}
+
+static void SendGetSkillListLocked() {
+    const auto pkt = BuildOpcodeOnlyPacket(static_cast<std::uint16_t>(RQ_GetSkillList));
+    SendToServerLocked(pkt);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Envoi RQ_GetSkillList (39).");
+}
+
+static void SendGetSpellListLocked() {
+    std::vector<unsigned char> v;
+    v.assign(4, 0);
+    PushBeShort(v, static_cast<std::uint16_t>(RQ_SendSpellList));
+    v.push_back(1);
+    SendToServerLocked(v);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Envoi RQ_SendSpellList (62).");
+}
+
+static void SendViewBackpackRequestLocked() {
+    std::vector<unsigned char> v;
+    v.assign(4, 0);
+    PushBeShort(v, static_cast<std::uint16_t>(RQ_ViewBackpack));
+    PushBeShort(v, 0);
+    SendToServerLocked(v);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Envoi RQ_ViewBackpack (18) refresh.");
+}
+
+static void SendPostEnterGameInventoryRequestsLocked() {
+    SendGetSkillListLocked();
+    SendGetSpellListLocked();
 }
 
 static void ParseMaxCharactersPerAccountInfo(const unsigned char *data, int len) {
@@ -1810,6 +2076,16 @@ static const char *OpcodeLabel(std::uint16_t op) {
             return "RQ_ManaChanged";
         case RQ_GetStatus:
             return "RQ_GetStatus";
+        case RQ_GetSkillList:
+            return "RQ_GetSkillList";
+        case RQ_SendSpellList:
+            return "RQ_SendSpellList";
+        case RQ_ChestContents:
+            return "RQ_ChestContents";
+        case RQ_ShowChest:
+            return "RQ_ShowChest";
+        case RQ_HideChest:
+            return "RQ_HideChest";
         case RQ_LevelUp:
             return "RQ_LevelUp";
         case RQ_XPchanged:
@@ -1842,7 +2118,14 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
     }
 
     const auto *bytes = reinterpret_cast<const unsigned char *>(lpbBuffer);
-    LogPayloadHexNet(bytes, nBufferSize, 24);
+    const std::uint16_t opEarly = ReadOpcodeFromTfcpayload(bytes, nBufferSize);
+    const bool inWorld = g_pipelineStep.load() >= 6;
+    const bool quietWorldPacket = inWorld && (opEarly == kEventObjectMoved ||
+                                              opEarly == static_cast<std::uint16_t>(RQ_UnitUpdate) ||
+                                              opEarly == static_cast<std::uint16_t>(RQ_MissingUnit));
+    if (!quietWorldPacket) {
+        LogPayloadHexNet(bytes, nBufferSize, 24);
+    }
 
     if (nBufferSize >= 4 && !TfcHeaderLooksSane(bytes, nBufferSize)) {
         T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn,
@@ -1850,16 +2133,18 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
                                "(couche S + TYPE_MASK / DecryptS2).");
     }
 
-    const std::uint16_t op = ReadOpcodeFromTfcpayload(bytes, nBufferSize);
-    const char *name = OpcodeLabel(op);
-    if (name) {
-        T4CNetworkDebugLogKind(T4CMatrixLogKind::Auth,
-                               "[AUTH] <- opcode %u (0x%04X) %s, app payload %d bytes",
-                               static_cast<unsigned>(op), static_cast<unsigned>(op), name, nBufferSize);
-    } else {
-        T4CNetworkDebugLogKind(T4CMatrixLogKind::Auth,
-                               "[AUTH] <- opcode %u (0x%04X) (non documente client Linux), %d bytes",
-                               static_cast<unsigned>(op), static_cast<unsigned>(op), nBufferSize);
+    const std::uint16_t op = opEarly;
+    if (!quietWorldPacket) {
+        const char *name = OpcodeLabel(op);
+        if (name) {
+            T4CNetworkDebugLogKind(T4CMatrixLogKind::Auth,
+                                   "[AUTH] <- opcode %u (0x%04X) %s, app payload %d bytes",
+                                   static_cast<unsigned>(op), static_cast<unsigned>(op), name, nBufferSize);
+        } else {
+            T4CNetworkDebugLogKind(T4CMatrixLogKind::Auth,
+                                   "[AUTH] <- opcode %u (0x%04X) (non documente client Linux), %d bytes",
+                                   static_cast<unsigned>(op), static_cast<unsigned>(op), nBufferSize);
+        }
     }
 
     if (op == kTfcStillConnected) {
@@ -1911,9 +2196,7 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
     } else if (op == static_cast<std::uint16_t>(RQ_DeletePlayer)) {
         HandleDeletePlayerReply(bytes, nBufferSize);
     } else if (op == static_cast<std::uint16_t>(RQ_ViewBackpack)) {
-        T4CNetworkDebugLogKind(
-            T4CMatrixLogKind::Phase,
-            "[PHASE] Opcode 18 (ViewBackpack) — fin du chargement 13 cote serveur.");
+        HandleViewBackpack(bytes, nBufferSize);
         if (g_pendingPost13Pipeline.exchange(false)) {
             SendFromPreInGameToInGameLocked();
             SendGetNearItemsLocked();
@@ -1939,6 +2222,19 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
         T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
                                "[PHASE] Reponse RQ_FromPreInGameToInGame (46) code=%d.",
                                resultCode);
+        if (resultCode == 0 && g_pipelineStep.load() >= 6) {
+            SendPostEnterGameInventoryRequestsLocked();
+        }
+    } else if (op == static_cast<std::uint16_t>(RQ_GetSkillList) && g_pipelineStep.load() >= 6) {
+        HandleGetSkillList(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_SendSpellList) && g_pipelineStep.load() >= 6) {
+        HandleSendSpellList(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_ChestContents) && g_pipelineStep.load() >= 6) {
+        HandleChestContents(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_ShowChest) && g_pipelineStep.load() >= 6) {
+        HandleShowChest();
+    } else if (op == static_cast<std::uint16_t>(RQ_HideChest) && g_pipelineStep.load() >= 6) {
+        HandleHideChest();
     } else if (op == static_cast<std::uint16_t>(RQ_GetStatus) && g_pipelineStep.load() >= 6) {
         HandleGetStatus(bytes, nBufferSize);
     } else if (op == static_cast<std::uint16_t>(RQ_HPchanged) && g_pipelineStep.load() >= 6 &&
@@ -2705,6 +3001,74 @@ bool T4CLoginSessionRequestPlayerStatus() {
     return true;
 }
 
+void T4CLoginSessionGetBackpack(T4CPlayerBackpack *out) {
+    if (!out) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_inventoryMutex);
+    *out = g_backpack;
+}
+
+void T4CLoginSessionGetSkillBook(T4CPlayerSkillBook *out) {
+    if (!out) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_inventoryMutex);
+    *out = g_skillBook;
+}
+
+void T4CLoginSessionGetSpellBook(T4CPlayerSpellBook *out) {
+    if (!out) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_inventoryMutex);
+    *out = g_spellBook;
+}
+
+void T4CLoginSessionGetBankChest(T4CPlayerBankChest *out) {
+    if (!out) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_inventoryMutex);
+    *out = g_bankChest;
+}
+
+bool T4CLoginSessionConsumeInventoryUpdate() {
+    return g_inventoryPending.exchange(false);
+}
+
+bool T4CLoginSessionRequestSkillList() {
+    std::lock_guard<std::mutex> lock(g_sessionMutex);
+    if (!g_comm || g_pipelineStep.load() < 6) {
+        return false;
+    }
+    SendGetSkillListLocked();
+    return true;
+}
+
+bool T4CLoginSessionRequestSpellList() {
+    std::lock_guard<std::mutex> lock(g_sessionMutex);
+    if (!g_comm || g_pipelineStep.load() < 6) {
+        return false;
+    }
+    SendGetSpellListLocked();
+    return true;
+}
+
+bool T4CLoginSessionRequestViewBackpack() {
+    std::lock_guard<std::mutex> lock(g_sessionMutex);
+    if (!g_comm || g_pipelineStep.load() < 6) {
+        return false;
+    }
+    SendViewBackpackRequestLocked();
+    return true;
+}
+
+bool T4CLoginSessionIsBankChestUiVisible() {
+    std::lock_guard<std::mutex> lock(g_inventoryMutex);
+    return g_bankChest.uiVisible;
+}
+
 bool T4CLoginSessionConsumePlayerPopupUpdate(T4CActivePlayer *outPlayer) {
     if (!g_playerPopupPending.exchange(false)) {
         return false;
@@ -2803,6 +3167,7 @@ void T4CLoginSessionResetAfterReturnToLogin() {
         g_playerStatus = {};
     }
     g_playerStatusPending.store(false);
+    ResetInventoryStateLocked();
     {
         std::lock_guard<std::mutex> lock(g_characterMutex);
         g_characterList.clear();
@@ -2960,6 +3325,34 @@ bool T4CLoginSessionConsumePlayerStatusUpdate(T4CPlayerStatus *) {
 }
 
 bool T4CLoginSessionRequestPlayerStatus() {
+    return false;
+}
+
+void T4CLoginSessionGetBackpack(T4CPlayerBackpack *) {}
+
+void T4CLoginSessionGetSkillBook(T4CPlayerSkillBook *) {}
+
+void T4CLoginSessionGetSpellBook(T4CPlayerSpellBook *) {}
+
+void T4CLoginSessionGetBankChest(T4CPlayerBankChest *) {}
+
+bool T4CLoginSessionConsumeInventoryUpdate() {
+    return false;
+}
+
+bool T4CLoginSessionRequestSkillList() {
+    return false;
+}
+
+bool T4CLoginSessionRequestSpellList() {
+    return false;
+}
+
+bool T4CLoginSessionRequestViewBackpack() {
+    return false;
+}
+
+bool T4CLoginSessionIsBankChestUiVisible() {
     return false;
 }
 

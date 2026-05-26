@@ -25,6 +25,20 @@ bool KeyDown(const SDL_Event &event, SDL_Scancode sc) {
            event.key.scancode == sc;
 }
 
+int HitTestCharacterRow(float mx, float my, std::size_t rowCount) {
+    if (rowCount == 0 || my < kListY || my >= kListY + static_cast<float>(rowCount) * kRowH) {
+        return -1;
+    }
+    const int row = static_cast<int>((my - kListY) / kRowH);
+    if (row < 0 || static_cast<std::size_t>(row) >= rowCount) {
+        return -1;
+    }
+    if (mx < kPaddingX - 8.0f || mx > kPaddingX + 704.0f) {
+        return -1;
+    }
+    return row;
+}
+
 }  // namespace
 
 CharacterSelectScreen::CharacterSelectScreen(SDL_Renderer *renderer, LauncherChrome *chrome)
@@ -247,6 +261,35 @@ bool CharacterSelectScreen::HandleEvent(const SDL_Event &event, SDL_Window *wind
                 return true;
             }
             return true;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+            if (confirmDelete_) {
+                return true;
+            }
+            SDL_Event ev = event;
+            if (renderer_) {
+                SDL_ConvertEventToRenderCoordinates(renderer_, &ev);
+            }
+            if (!ev.button.down || ev.button.button != SDL_BUTTON_LEFT) {
+                return true;
+            }
+            const int row = HitTestCharacterRow(ev.button.x, ev.button.y, displayLines_.size());
+            if (row >= 0) {
+                const Uint64 now = SDL_GetTicks();
+                constexpr Uint64 kDoubleClickMs = 400;
+                if (row == lastCharClickRow_ && lastCharClickMs_ != 0 &&
+                    now - lastCharClickMs_ <= kDoubleClickMs) {
+                    selectedIndex_ = row;
+                    lastCharClickRow_ = -1;
+                    lastCharClickMs_ = 0;
+                    tryEnterWorld(window);
+                } else {
+                    selectedIndex_ = row;
+                    lastCharClickRow_ = row;
+                    lastCharClickMs_ = now;
+                }
+            }
+            return true;
+        }
         default:
             return true;
     }
@@ -283,6 +326,8 @@ void CharacterSelectScreen::renderActionFooter(SDL_Renderer *renderer, const SDL
         T4CLoginSessionCopyCharacterList(&slots, &maxPerAccount);
         if (!slots.empty()) {
             lines.emplace_back("[Entree]  Jouer avec le personnage selectionne");
+            lines.emplace_back("Clic x2   Entrer en jeu (double-clic sur la ligne)");
+            lines.emplace_back("Clic      Selectionner un personnage dans la liste");
         }
         char createLine[96];
         std::snprintf(createLine, sizeof(createLine), "[C]       Creer un personnage (%zu/%d)",

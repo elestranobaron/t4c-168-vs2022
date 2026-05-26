@@ -75,6 +75,10 @@ class GameWorldScreen {
     bool handleSideMenuKey(const SDL_Event &event);
     bool handleOptionsPopupKey(const SDL_Event &event);
     bool handleSideMenuMouse(const SDL_Event &event);
+    void freeCharacterPanelCache();
+    void rebuildCharacterPanelCache();
+    void drawCharacterPanel();
+    void toggleCharacterPanel(int kind, bool forceRefresh = false);
     SDL_Surface *makeLayer(int w, int h, bool with_alpha);
 
     SDL_Renderer *renderer_{nullptr};
@@ -112,6 +116,18 @@ class GameWorldScreen {
     bool playerNpcSpawned_{false};
     std::unordered_set<std::int32_t> remoteUnitIds_;
     std::unordered_map<std::int32_t, std::pair<unsigned int, unsigned int>> remotePositions_;
+    /** 0=none 1=sac 2=skills 3=sorts 4=coffre banque */
+    int characterPanel_{0};
+    struct CharacterPanelGlyph {
+        SDL_Surface *surface{nullptr};
+        int x{0};
+        int y{0};
+    };
+    std::vector<CharacterPanelGlyph> panelGlyphs_;
+    SDL_Surface *panelTitleSurf_{nullptr};
+    SDL_Surface *panelFooterSurf_{nullptr};
+    SDL_Rect panelRect_{};
+    bool panelCacheDirty_{true};
     float fps_{0.f};
     std::string dataRoot_;
     std::string lastError_;
