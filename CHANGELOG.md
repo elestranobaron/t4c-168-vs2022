@@ -246,6 +246,15 @@ Ne **pas** mélanger IP Vircom (`.WDA`, dumps txt données, `data/`) et code GPL
 
 **Fichiers :** `T4CPlayerInventory.h`, `T4CLoginSession.{cpp,h}`, `GameWorldScreen.{cpp,h}`.
 
+### 2026-05-26 05:15:00 — Fix freeze touche E (equipement)
+
+**Famille :** **Perso / ODBC**.
+
+- **Key repeat** ignore sur **E** (plus de rafale `RQ_ViewEquiped` / 19).
+- Requete opcode **19** seulement si equipement pas encore `valid` ; **Maj+E** force un refresh.
+
+**Fichier :** `GameWorldScreen.cpp`.
+
 ### 2026-05-26 02:30:00 — Noms d'objets inventaire (opcode 59)
 
 **Famille :** **Perso / ODBC**.

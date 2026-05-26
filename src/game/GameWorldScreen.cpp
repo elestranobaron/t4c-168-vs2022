@@ -942,7 +942,11 @@ void GameWorldScreen::toggleCharacterPanel(const int kind, const bool forceRefre
             T4CLoginSessionRequestSpellList();
         }
     } else if (kind == 5) {
-        T4CLoginSessionRequestViewEquipped();
+        T4CPlayerEquipment eq{};
+        T4CLoginSessionGetEquipment(&eq);
+        if (forceRefresh || !eq.valid) {
+            T4CLoginSessionRequestViewEquipped();
+        }
     }
 #else
     (void)forceRefresh;
@@ -1226,6 +1230,7 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
             case SDLK_K:
             case SDLK_P:
             case SDLK_U:
+            case SDLK_E:
                 return true;
             default:
                 break;
@@ -1285,9 +1290,11 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
         case SDLK_U:
             toggleCharacterPanel(4, false);
             return true;
-        case SDLK_E:
-            toggleCharacterPanel(5, true);
+        case SDLK_E: {
+            const bool shift = (event.key.mod & SDL_KMOD_SHIFT) != 0;
+            toggleCharacterPanel(5, shift);
             return true;
+        }
         default:
             break;
     }
