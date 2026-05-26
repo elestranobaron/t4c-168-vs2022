@@ -73,9 +73,13 @@ void appendBagLines(const std::vector<T4CBagItem> &items, std::vector<std::strin
         return;
     }
     for (const T4CBagItem &it : items) {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "app %u id %d x%u chg %d", static_cast<unsigned>(it.appearance),
-                      static_cast<int>(it.objectId), static_cast<unsigned>(it.qty), static_cast<int>(it.charges));
+        char buf[160];
+        if (!it.name.empty()) {
+            std::snprintf(buf, sizeof(buf), "%s x%u", it.name.c_str(), static_cast<unsigned>(it.qty));
+        } else {
+            std::snprintf(buf, sizeof(buf), "app %u id %d x%u", static_cast<unsigned>(it.appearance),
+                          static_cast<int>(it.objectId), static_cast<unsigned>(it.qty));
+        }
         lines->push_back(buf);
     }
 }
@@ -145,6 +149,44 @@ bool moveDeltaFromOpcode(const std::uint16_t opcode, int &dx, int &dy) {
         default:
             return false;
     }
+}
+
+bool worldDeltaToMoveOpcode(const int dx, const int dy, std::uint16_t &opcode) {
+    const int sx = (dx > 0) - (dx < 0);
+    const int sy = (dy > 0) - (dy < 0);
+    if (sx == 0 && sy < 0) {
+        opcode = 1;
+        return true;
+    }
+    if (sx > 0 && sy < 0) {
+        opcode = 2;
+        return true;
+    }
+    if (sx > 0 && sy == 0) {
+        opcode = 3;
+        return true;
+    }
+    if (sx > 0 && sy > 0) {
+        opcode = 4;
+        return true;
+    }
+    if (sx == 0 && sy > 0) {
+        opcode = 5;
+        return true;
+    }
+    if (sx < 0 && sy > 0) {
+        opcode = 6;
+        return true;
+    }
+    if (sx < 0 && sy == 0) {
+        opcode = 7;
+        return true;
+    }
+    if (sx < 0 && sy < 0) {
+        opcode = 8;
+        return true;
+    }
+    return false;
 }
 
 }  // namespace
@@ -575,6 +617,7 @@ void GameWorldScreen::redraw() {
     TnC_FillArgb(screen_, nullptr, 0xFF000000);
     SDL_BlitSurface(sol_, nullptr, screen_, nullptr);
     SDL_BlitSurface(decor_, nullptr, screen_, nullptr);
+    drawGroundObjectMarkers();
     npcm_->draw_npc(screen_, static_cast<int>(locX_), static_cast<int>(locY_));
     txtm_->draw_texts(screen_, static_cast<int>(locX_), static_cast<int>(locY_));
 
@@ -653,6 +696,38 @@ void GameWorldScreen::redraw() {
     fps_ = 1000.f / static_cast<float>(TnC_GetTicksMs() - t0 + 1);
 }
 
+void GameWorldScreen::drawGroundObjectMarkers() {
+#if defined(LINUX_PORT)
+    if (!fm_ || !screen_) {
+        return;
+    }
+    T4CLoginSessionCopyGroundObjectMarkers(&groundMarkers_);
+    if (groundMarkers_.empty()) {
+        return;
+    }
+    constexpr int tileW2 = 16;
+    constexpr int tileH2 = 8;
+    const int centerX = kLogicalWidth / 2;
+    const int centerY = kLogicalHeight / 2;
+    const int maxMarkers = 120;
+    int drawn = 0;
+    for (const T4CGroundObjectMarker &mk : groundMarkers_) {
+        if (drawn >= maxMarkers) {
+            break;
+        }
+        const int dx = static_cast<int>(mk.x) - static_cast<int>(locX_);
+        const int dy = static_cast<int>(mk.y) - static_cast<int>(locY_);
+        const int sx = centerX + (dx - dy) * tileW2;
+        const int sy = centerY + (dx + dy) * tileH2;
+        if (sx < -40 || sx > kLogicalWidth + 40 || sy < -20 || sy > kLogicalHeight + 20) {
+            continue;
+        }
+        blitText(fm_, screen_, sx - 8, sy - 16, "[]", 0xFF58E0FF);
+        ++drawn;
+    }
+#endif
+}
+
 void GameWorldScreen::Update() {
     if (!ready_) {
         return;
@@ -691,6 +766,11 @@ void GameWorldScreen::Update() {
     }
     if (characterPanel_ != 0 && panelCacheDirty_) {
         rebuildCharacterPanelCache();
+    }
+    if (characterPanel_ == 1) {
+        T4CLoginSessionPollItemNameRequests(T4CItemSearchPlace::Backpack, 4);
+    } else if (characterPanel_ == 4) {
+        T4CLoginSessionPollItemNameRequests(T4CItemSearchPlace::BankChest, 4);
     }
 #endif
 
@@ -861,6 +941,8 @@ void GameWorldScreen::toggleCharacterPanel(const int kind, const bool forceRefre
         if (forceRefresh || !book.valid) {
             T4CLoginSessionRequestSpellList();
         }
+    } else if (kind == 5) {
+        T4CLoginSessionRequestViewEquipped();
     }
 #else
     (void)forceRefresh;
@@ -921,6 +1003,24 @@ void GameWorldScreen::rebuildCharacterPanelCache() {
         T4CPlayerBankChest chest{};
         T4CLoginSessionGetBankChest(&chest);
         appendBagLines(chest.items, &lines);
+    } else if (characterPanel_ == 5) {
+        title = "Equipement (19)";
+        static const char *kSlotNames[] = {"Body",   "Gloves", "Helm",     "Legs", "Bracelets",
+                                           "Neck",   "Main",   "Off-hand", "Ring1", "Ring2",
+                                           "Belt",   "Cape",   "Feet"};
+        T4CPlayerEquipment eq{};
+        T4CLoginSessionGetEquipment(&eq);
+        if (!eq.valid || eq.items.size() < 13) {
+            lines.emplace_back("(equipement non recu — touche E refresh)");
+        } else {
+            for (std::size_t i = 0; i < eq.items.size() && i < 13; ++i) {
+                const T4CEquippedItem &it = eq.items[i];
+                char buf[192];
+                const char *name = it.name.empty() ? "(vide)" : it.name.c_str();
+                std::snprintf(buf, sizeof(buf), "%-9s %s", kSlotNames[i], name);
+                lines.emplace_back(buf);
+            }
+        }
     }
 
     constexpr int panelW = 420;
@@ -956,7 +1056,7 @@ void GameWorldScreen::rebuildCharacterPanelCache() {
         }
     }
     panelFooterSurf_ = fm_->get_text(
-        const_cast<char *>("B sac K skills P sorts U coffre Esc ferme | Maj+B/K/P refresh"), 0xFF888888);
+        const_cast<char *>("B sac K skills P sorts U coffre E equip Esc ferme | Maj+B/K/P refresh"), 0xFF888888);
 #else
     panelCacheDirty_ = false;
 #endif
@@ -1027,6 +1127,36 @@ bool GameWorldScreen::handleSideMenuMouse(const SDL_Event &event) {
     return true;
 }
 
+bool GameWorldScreen::handleWorldClickMove(const SDL_Event &event) {
+    if (event.type != SDL_EVENT_MOUSE_BUTTON_DOWN || event.button.button != SDL_BUTTON_LEFT || !renderer_) {
+        return false;
+    }
+    SDL_Event ev = event;
+    SDL_ConvertEventToRenderCoordinates(renderer_, &ev);
+    const int mx = static_cast<int>(ev.button.x);
+    const int my = static_cast<int>(ev.button.y);
+    const int centerX = kLogicalWidth / 2;
+    const int centerY = kLogicalHeight / 2;
+    const int relX = mx - centerX;
+    const int relY = my - centerY;
+    const int wx = (relX / 16 + relY / 8) / 2;
+    const int wy = (relY / 8 - relX / 16) / 2;
+    const int targetX = static_cast<int>(locX_) + wx;
+    const int targetY = static_cast<int>(locY_) + wy;
+    const int dx = targetX - static_cast<int>(playerX_);
+    const int dy = targetY - static_cast<int>(playerY_);
+    std::uint16_t move = 0;
+    if (!worldDeltaToMoveOpcode(dx, dy, move)) {
+        return false;
+    }
+    if (tryMovePlayer(move)) {
+        pendingMoveOpcode_ = 0;
+    } else {
+        pendingMoveOpcode_ = move;
+    }
+    return true;
+}
+
 bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
     if (!ready_) {
         return true;
@@ -1042,6 +1172,9 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
         }
         if (sideMenu_.isOpen()) {
             return handleSideMenuMouse(event);
+        }
+        if (handleWorldClickMove(event)) {
+            return true;
         }
     }
 
@@ -1151,6 +1284,9 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
         }
         case SDLK_U:
             toggleCharacterPanel(4, false);
+            return true;
+        case SDLK_E:
+            toggleCharacterPanel(5, true);
             return true;
         default:
             break;

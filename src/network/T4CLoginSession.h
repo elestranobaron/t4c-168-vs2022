@@ -196,6 +196,7 @@ void T4CLoginSessionGetBackpack(T4CPlayerBackpack *out);
 void T4CLoginSessionGetSkillBook(T4CPlayerSkillBook *out);
 void T4CLoginSessionGetSpellBook(T4CPlayerSpellBook *out);
 void T4CLoginSessionGetBankChest(T4CPlayerBankChest *out);
+void T4CLoginSessionGetEquipment(T4CPlayerEquipment *out);
 
 /** True une fois apres maj inventaire, skills, sorts ou coffre. */
 bool T4CLoginSessionConsumeInventoryUpdate();
@@ -203,6 +204,13 @@ bool T4CLoginSessionConsumeInventoryUpdate();
 bool T4CLoginSessionRequestSkillList();
 bool T4CLoginSessionRequestSpellList();
 bool T4CLoginSessionRequestViewBackpack();
+bool T4CLoginSessionRequestViewEquipped();
+
+/**
+ * Demande les noms manquants (opcode 59) pour le sac ou le coffre banque.
+ * A appeler depuis la boucle monde (limite interne par frame).
+ */
+void T4CLoginSessionPollItemNameRequests(T4CItemSearchPlace place, int maxPerTick);
 
 /** Coffre banque visible (opcode 109/110). */
 bool T4CLoginSessionIsBankChestUiVisible();
@@ -242,6 +250,14 @@ struct T4CRemoteUnitEvent {
     char hpPercent{0};
 };
 
+/** Marqueur objet sol (portes/coffres/objets) extrait des opcodes 16/1. */
+struct T4CGroundObjectMarker {
+    std::int32_t unitId{0};
+    std::uint16_t appearance{0};
+    unsigned int x{0};
+    unsigned int y{0};
+};
+
 /** Vide la file d'evenements unites distantes (thread-safe, depuis la boucle GameWorld). */
 void T4CLoginSessionDrainRemoteUnitEvents(std::vector<T4CRemoteUnitEvent> *outEvents);
 
@@ -250,6 +266,7 @@ const char *T4CSpriteNameFromAppearance(std::uint16_t appearance);
 
 /** Reinitialise la file (logout, teleport, retour login). */
 void T4CLoginSessionClearRemoteUnits();
+void T4CLoginSessionCopyGroundObjectMarkers(std::vector<T4CGroundObjectMarker> *outMarkers);
 
 /** @deprecated Utiliser ConsumeCharacterListReady + flux selection. */
 bool T4CLoginSessionConsumeNetworkSuccessDialog();

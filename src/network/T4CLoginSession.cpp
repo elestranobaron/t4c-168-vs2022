@@ -108,6 +108,7 @@ static T4CPlayerBackpack g_backpack{};
 static T4CPlayerSkillBook g_skillBook{};
 static T4CPlayerSpellBook g_spellBook{};
 static T4CPlayerBankChest g_bankChest{};
+static T4CPlayerEquipment g_equipment{};
 static std::mutex g_inventoryMutex;
 static std::atomic<bool> g_inventoryPending{false};
 /** Classe derivee du questionnaire (opcode 25), cle = nom perso. */
@@ -118,6 +119,8 @@ static std::atomic<bool> g_playerTeleportPending{false};
 
 static std::mutex g_remoteEventsMutex;
 static std::vector<T4CRemoteUnitEvent> g_remoteEvents;
+static std::mutex g_groundObjectsMutex;
+static std::unordered_map<std::int32_t, T4CGroundObjectMarker> g_groundObjectsByUnitId;
 
 /** __EVENT_OBJECT_MOVED (EventListing.h) — deplacement broadcast. */
 static constexpr std::uint16_t kEventObjectMoved = 1;
@@ -297,6 +300,49 @@ static void HandleViewBackpack(const unsigned char *data, int len) {
                            bp.items.size(), static_cast<int>(bp.containerId), bp.showUi ? 1 : 0);
 }
 
+static void HandleViewEquipped(const unsigned char *data, int len) {
+    if (len < 7) {
+        return;
+    }
+    int off = 6;
+    T4CPlayerEquipment eq{};
+    eq.rangedAttack = data[off++] != 0;
+    constexpr int kEquipSlots = 13;
+    eq.items.reserve(kEquipSlots);
+    for (int slot = 0; slot < kEquipSlots; ++slot) {
+        if (off + 14 > len) {
+            break;
+        }
+        T4CEquippedItem item{};
+        item.slot = static_cast<T4CEquipSlot>(slot);
+        item.objectId = ReadBeInt32Msf(data, off, len);
+        off += 4;
+        item.appearance = ReadBeUint16(data, off, len);
+        off += 2;
+        item.baseId = ReadBeUint16(data, off, len);
+        off += 2;
+        item.qty = ReadBeUint16(data, off, len);
+        off += 2;
+        item.charges = ReadBeInt32Msf(data, off, len);
+        off += 4;
+        if (!ReadTfcString(data, len, off, &item.name)) {
+            break;
+        }
+        eq.items.push_back(std::move(item));
+    }
+    const std::size_t slotCount = eq.items.size();
+    eq.valid = slotCount == kEquipSlots;
+    const bool ranged = eq.rangedAttack;
+    {
+        std::lock_guard<std::mutex> lock(g_inventoryMutex);
+        g_equipment = std::move(eq);
+    }
+    MarkInventoryUpdated();
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_ViewEquiped (19) — %zu slots, ranged=%d.",
+                           slotCount, ranged ? 1 : 0);
+}
+
 static void HandleGetSkillList(const unsigned char *data, int len) {
     if (len < 8) {
         return;
@@ -414,6 +460,43 @@ static void HandleChestContents(const unsigned char *data, int len) {
     MarkInventoryUpdated();
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] RQ_ChestContents (106) — %zu objet(s) coffre banque.",
                            chest.items.size());
+}
+
+static void HandleQueryItemName(const unsigned char *data, int len) {
+    if (len < 11) {
+        return;
+    }
+    int off = 6;
+    const unsigned char place = data[off++];
+    const std::int32_t objectId = ReadBeInt32Msf(data, off, len);
+    off += 4;
+    std::string name;
+    if (!ReadTfcString(data, len, off, &name)) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Warn, "[PHASE] RQ_QueryItemName (59) nom tronque (%d octets).", len);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_inventoryMutex);
+        auto apply = [&](std::vector<T4CBagItem> &items) {
+            for (T4CBagItem &it : items) {
+                if (it.objectId == objectId) {
+                    it.name = name;
+                    it.nameQueryPending = false;
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (place == 0) {
+            apply(g_backpack.items);
+        } else if (place == 1) {
+            apply(g_bankChest.items);
+        }
+    }
+    MarkInventoryUpdated();
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_QueryItemName (59) place=%u id=%d — «%s».", static_cast<unsigned>(place),
+                           static_cast<int>(objectId), name.c_str());
 }
 
 static void HandleShowChest() {
@@ -863,7 +946,24 @@ static void SendViewBackpackRequestLocked() {
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Envoi RQ_ViewBackpack (18) refresh.");
 }
 
+static void SendViewEquippedRequestLocked() {
+    const auto pkt = BuildOpcodeOnlyPacket(static_cast<std::uint16_t>(RQ_ViewEquiped));
+    SendToServerLocked(pkt);
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Envoi RQ_ViewEquiped (19).");
+}
+
+static void SendQueryItemNameLocked(const unsigned char place, const std::int32_t objectId) {
+    std::vector<unsigned char> v;
+    v.assign(4, 0);
+    PushBeShort(v, static_cast<std::uint16_t>(RQ_QueryItemName));
+    PushBeShort(v, 0);
+    v.push_back(place);
+    PushBeInt32Msf(v, objectId);
+    SendToServerLocked(v);
+}
+
 static void SendPostEnterGameInventoryRequestsLocked() {
+    SendViewEquippedRequestLocked();
     SendGetSkillListLocked();
     SendGetSpellListLocked();
 }
@@ -1471,6 +1571,27 @@ static void PushRemoteUnitEvent(T4CRemoteUnitEvent ev) {
     g_remoteEvents.push_back(ev);
 }
 
+static bool IsGroundObjectAppearance(const std::uint16_t appearance) {
+    return appearance > 0 && appearance < 10001;
+}
+
+static void UpsertGroundObjectMarker(const std::int32_t unitId, const std::uint16_t appearance,
+                                     const unsigned int x, const unsigned int y) {
+    if (unitId == 0 || !IsGroundObjectAppearance(appearance)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_groundObjectsMutex);
+    g_groundObjectsByUnitId[unitId] = T4CGroundObjectMarker{unitId, appearance, x, y};
+}
+
+static void RemoveGroundObjectMarker(const std::int32_t unitId) {
+    if (unitId == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_groundObjectsMutex);
+    g_groundObjectsByUnitId.erase(unitId);
+}
+
 static bool ParsePacketUnitInformation(const unsigned char *data, int off, int len, std::uint16_t *appearance,
                                        std::int32_t *unitId, char *radiance, char *status, char *hpPercent) {
     if (!data || !appearance || !unitId || off + 11 > len) {
@@ -1645,6 +1766,7 @@ static void HandleObjectAppearedList(const unsigned char *data, int len) {
             break;
         }
         if (sx >= 0 && sy >= 0) {
+            UpsertGroundObjectMarker(unitId, appearance, static_cast<unsigned int>(sx), static_cast<unsigned int>(sy));
             QueueRemoteUnitSpawn(static_cast<unsigned int>(sx), static_cast<unsigned int>(sy), appearance, unitId,
                                  hpPercent);
         }
@@ -1678,6 +1800,7 @@ static void HandleMissingUnit(const unsigned char *data, int len) {
         return;
     }
     const std::int32_t unitId = ReadBeInt32Msf(data, 6, len);
+    RemoveGroundObjectMarker(unitId);
     QueueRemoteUnitRemove(unitId);
 }
 
@@ -1695,6 +1818,7 @@ static bool ApplyRemoteUnitMove(const unsigned char *data, int len) {
     if (!ParsePacketUnitInformation(data, 10, len, &appearance, &unitId, nullptr, nullptr, nullptr)) {
         return false;
     }
+    UpsertGroundObjectMarker(unitId, appearance, static_cast<unsigned int>(sx), static_cast<unsigned int>(sy));
     if (IsLocalPlayerUnitId(unitId)) {
         return false;
     }
@@ -1826,6 +1950,9 @@ static void HandlePacketPopup(const unsigned char *data, int len) {
     char hpPercent = 0;
     if (!ParsePacketUnitInformation(data, 10, len, &appearance, &unitId, nullptr, nullptr, &hpPercent)) {
         return;
+    }
+    if (sx >= 0 && sy >= 0) {
+        UpsertGroundObjectMarker(unitId, appearance, static_cast<unsigned int>(sx), static_cast<unsigned int>(sy));
     }
 
     if (IsPlayerUnitAppearance(appearance)) {
@@ -2203,6 +2330,8 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
             T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
                                    "[PHASE] Apres 18 : envoi 46 puis 60 (aligne Windows / serveur boPreInGame).");
         }
+    } else if (op == static_cast<std::uint16_t>(RQ_ViewEquiped) && g_pipelineStep.load() >= 6) {
+        HandleViewEquipped(bytes, nBufferSize);
     } else if (g_waitingPutPlayerInGame.load() &&
                (op == static_cast<std::uint16_t>(RQ_ViewEquiped) ||
                 op == static_cast<std::uint16_t>(RQ_HPchanged) ||
@@ -2231,6 +2360,8 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
         HandleSendSpellList(bytes, nBufferSize);
     } else if (op == static_cast<std::uint16_t>(RQ_ChestContents) && g_pipelineStep.load() >= 6) {
         HandleChestContents(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_QueryItemName) && g_pipelineStep.load() >= 6) {
+        HandleQueryItemName(bytes, nBufferSize);
     } else if (op == static_cast<std::uint16_t>(RQ_ShowChest) && g_pipelineStep.load() >= 6) {
         HandleShowChest();
     } else if (op == static_cast<std::uint16_t>(RQ_HideChest) && g_pipelineStep.load() >= 6) {
@@ -3033,6 +3164,14 @@ void T4CLoginSessionGetBankChest(T4CPlayerBankChest *out) {
     *out = g_bankChest;
 }
 
+void T4CLoginSessionGetEquipment(T4CPlayerEquipment *out) {
+    if (!out) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_inventoryMutex);
+    *out = g_equipment;
+}
+
 bool T4CLoginSessionConsumeInventoryUpdate() {
     return g_inventoryPending.exchange(false);
 }
@@ -3062,6 +3201,70 @@ bool T4CLoginSessionRequestViewBackpack() {
     }
     SendViewBackpackRequestLocked();
     return true;
+}
+
+bool T4CLoginSessionRequestViewEquipped() {
+    std::lock_guard<std::mutex> lock(g_sessionMutex);
+    if (!g_comm || g_pipelineStep.load() < 6) {
+        return false;
+    }
+    SendViewEquippedRequestLocked();
+    return true;
+}
+
+void T4CLoginSessionPollItemNameRequests(const T4CItemSearchPlace place, const int maxPerTick) {
+    if (maxPerTick <= 0) {
+        return;
+    }
+    const unsigned char placeByte = static_cast<unsigned char>(place);
+    std::vector<std::int32_t> toQuery;
+    toQuery.reserve(static_cast<std::size_t>(maxPerTick));
+    {
+        std::lock_guard<std::mutex> lock(g_inventoryMutex);
+        std::vector<T4CBagItem> *items = nullptr;
+        if (place == T4CItemSearchPlace::Backpack && g_backpack.valid) {
+            items = &g_backpack.items;
+        } else if (place == T4CItemSearchPlace::BankChest && g_bankChest.valid) {
+            items = &g_bankChest.items;
+        }
+        if (!items) {
+            return;
+        }
+        for (T4CBagItem &it : *items) {
+            if (static_cast<int>(toQuery.size()) >= maxPerTick) {
+                break;
+            }
+            if (it.objectId == 0 || !it.name.empty() || it.nameQueryPending) {
+                continue;
+            }
+            it.nameQueryPending = true;
+            toQuery.push_back(it.objectId);
+        }
+    }
+    if (toQuery.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> sessionLock(g_sessionMutex);
+    if (!g_comm || g_pipelineStep.load() < 6) {
+        std::lock_guard<std::mutex> lock(g_inventoryMutex);
+        std::vector<T4CBagItem> *items = nullptr;
+        if (place == T4CItemSearchPlace::Backpack) {
+            items = &g_backpack.items;
+        } else if (place == T4CItemSearchPlace::BankChest) {
+            items = &g_bankChest.items;
+        }
+        if (items) {
+            for (T4CBagItem &it : *items) {
+                if (std::find(toQuery.begin(), toQuery.end(), it.objectId) != toQuery.end()) {
+                    it.nameQueryPending = false;
+                }
+            }
+        }
+        return;
+    }
+    for (const std::int32_t objectId : toQuery) {
+        SendQueryItemNameLocked(placeByte, objectId);
+    }
 }
 
 bool T4CLoginSessionIsBankChestUiVisible() {
@@ -3105,8 +3308,26 @@ void T4CLoginSessionDrainRemoteUnitEvents(std::vector<T4CRemoteUnitEvent> *outEv
 }
 
 void T4CLoginSessionClearRemoteUnits() {
-    std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
-    g_remoteEvents.clear();
+    {
+        std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
+        g_remoteEvents.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_groundObjectsMutex);
+        g_groundObjectsByUnitId.clear();
+    }
+}
+
+void T4CLoginSessionCopyGroundObjectMarkers(std::vector<T4CGroundObjectMarker> *outMarkers) {
+    if (!outMarkers) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_groundObjectsMutex);
+    outMarkers->clear();
+    outMarkers->reserve(g_groundObjectsByUnitId.size());
+    for (const auto &kv : g_groundObjectsByUnitId) {
+        outMarkers->push_back(kv.second);
+    }
 }
 
 bool T4CLoginSessionSendMove(const std::uint16_t moveOpcode) {
@@ -3336,6 +3557,8 @@ void T4CLoginSessionGetSpellBook(T4CPlayerSpellBook *) {}
 
 void T4CLoginSessionGetBankChest(T4CPlayerBankChest *) {}
 
+void T4CLoginSessionGetEquipment(T4CPlayerEquipment *) {}
+
 bool T4CLoginSessionConsumeInventoryUpdate() {
     return false;
 }
@@ -3351,6 +3574,12 @@ bool T4CLoginSessionRequestSpellList() {
 bool T4CLoginSessionRequestViewBackpack() {
     return false;
 }
+
+bool T4CLoginSessionRequestViewEquipped() {
+    return false;
+}
+
+void T4CLoginSessionPollItemNameRequests(T4CItemSearchPlace, int) {}
 
 bool T4CLoginSessionIsBankChestUiVisible() {
     return false;
@@ -3373,6 +3602,8 @@ void T4CLoginSessionUpdateActivePlayerPosition(unsigned int, unsigned int) {}
 void T4CLoginSessionDrainRemoteUnitEvents(std::vector<T4CRemoteUnitEvent> *) {}
 
 void T4CLoginSessionClearRemoteUnits() {}
+
+void T4CLoginSessionCopyGroundObjectMarkers(std::vector<T4CGroundObjectMarker> *) {}
 
 const char *T4CSpriteNameFromAppearance(std::uint16_t) {
     return "BlackWarrior";

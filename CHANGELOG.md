@@ -235,6 +235,26 @@ Ne **pas** mélanger IP Vircom (`.WDA`, dumps txt données, `data/`) et code GPL
 
 **Fichiers :** `T4CPlayerInventory.h`, `T4CLoginSession.{cpp,h}`, `GameWorldScreen.{cpp,h}`.
 
+### 2026-05-26 03:45:00 — Equipement (19), objets sol et clic deplacement
+
+**Famille :** **Perso / ODBC** + **Unites reseau** + input monde.
+
+- Parse `RQ_ViewEquiped` (**19**) : 13 slots (body→feet), nom d'objet, quantite/charges ; panneau **E**.
+- Requete `RQ_ViewEquiped` ajoutee aux demandes post-entree monde et refresh manuel touche **E**.
+- Marqueurs objets au sol (apparence `< 10001`) derives de **16/1/70** et dessines en overlay.
+- Clic gauche monde : conversion iso approximative pixel→case, envoi d'un pas serveur (opcode 1–8) vers la direction cible.
+
+**Fichiers :** `T4CPlayerInventory.h`, `T4CLoginSession.{cpp,h}`, `GameWorldScreen.{cpp,h}`.
+
+### 2026-05-26 02:30:00 — Noms d'objets inventaire (opcode 59)
+
+**Famille :** **Perso / ODBC**.
+
+- Parse reponse `RQ_QueryItemName` (59) : place + objectId + chaine TFC (aligne `TFCMessagesHandler::RQFUNC_QueryItemName`).
+- Envoi limite (4/tick) pendant panneaux **B** / **U** ; lignes sac/coffre affichent le nom quand recu.
+
+**Fichiers :** `T4CPlayerInventory.h`, `T4CLoginSession.{cpp,h}`, `GameWorldScreen.cpp`.
+
 ### 2026-05-26 02:15:00 — Fix freeze touches B / K / P / U
 
 - **Key repeat** ignore sur B/K/P/U (plus de rafale `RQ_ViewBackpack` / `39` / `62`).
@@ -264,7 +284,7 @@ Ne **pas** mélanger IP Vircom (`.WDA`, dumps txt données, `data/`) et code GPL
 
 | Item | Client Windows | Port Linux | Verdict |
 |------|----------------|------------|---------|
-| **Déplacement souris (clic → pathfinding)** | `Pf.cpp` + clic droit/gauche sur tuile isométrique | Flèches clavier seulement (`GameWorldScreen::heldMoveOpcode`) | **Hors scope** commit HUD — feature à part |
+| **Déplacement souris (clic → pathfinding)** | `Pf.cpp` + clic droit/gauche sur tuile isométrique | Clic gauche = 1 pas direction cible (conversion iso simple), pas de file A* multi-cases | **Partiel** (03:45) |
 | Prérequis | Conversion pixel → case monde, A* (`Pf.cpp`), enchaînement opcodes 1–8 | Idem + serveur autoritaire (1 pas / ack) | Estimation : écran moteur + UI, pas un patch réseau |
 
 **Recommandation :** traiter après combat/loot ou en parallèle « confort joueur », pas mélangé au commit stats **43**.

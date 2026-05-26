@@ -17,6 +17,7 @@ class MAPInterface;
 class NPCManager;
 class TextManager;
 class VSFInterface;
+struct T4CGroundObjectMarker;
 
 /** Vue monde isométrique TnC (VSF + MapInterface) après authentification réseau. */
 class GameWorldScreen {
@@ -64,6 +65,8 @@ class GameWorldScreen {
     void snapPlayerVisual(unsigned int x, unsigned int y);
     void setPlayerFacingFromDelta(int dx, int dy);
     void setPlayerWalkAnim(bool walking);
+    bool handleWorldClickMove(const SDL_Event &event);
+    void drawGroundObjectMarkers();
     /** 0 si aucune touche de deplacement. */
     std::uint16_t heldMoveOpcode() const;
     void applyServerPlayerPosition(unsigned int x, unsigned int y);
@@ -116,8 +119,9 @@ class GameWorldScreen {
     bool playerNpcSpawned_{false};
     std::unordered_set<std::int32_t> remoteUnitIds_;
     std::unordered_map<std::int32_t, std::pair<unsigned int, unsigned int>> remotePositions_;
-    /** 0=none 1=sac 2=skills 3=sorts 4=coffre banque */
+    /** 0=none 1=sac 2=skills 3=sorts 4=coffre banque 5=equipement */
     int characterPanel_{0};
+    std::vector<T4CGroundObjectMarker> groundMarkers_;
     struct CharacterPanelGlyph {
         SDL_Surface *surface{nullptr};
         int x{0};
