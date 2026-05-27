@@ -3,6 +3,7 @@
 #include "game/TncDataPaths.h"
 #include "network/T4CLoginSession.h"
 #include "audio/T4CGameMusic.h"
+#include "gui/T4CUiFont.h"
 #include "Sdl3FramePresenter.h"
 #include "tnc_sdl3.h"
 
@@ -21,6 +22,20 @@
 #include <utility>
 
 namespace {
+
+#if defined(LINUX_PORT)
+constexpr float kHudFontPt = 24.f;
+constexpr int kHudBarW = 400;
+constexpr int kHudBarH = 28;
+constexpr int kHudPanelW = 540;
+constexpr int kHudLineH = 30;
+constexpr int kHudPanelMaxLines = 14;
+#endif
+
+SDL_Color argbToColor(const std::uint32_t argb) {
+    return SDL_Color{static_cast<Uint8>((argb >> 16) & 0xFF), static_cast<Uint8>((argb >> 8) & 0xFF),
+                     static_cast<Uint8>(argb & 0xFF), static_cast<Uint8>((argb >> 24) & 0xFF)};
+}
 
 bool keyPressed(const SDL_Event &event, const SDL_Keycode key, const SDL_Scancode sc) {
     return event.key.key == key || event.key.scancode == sc;
@@ -45,8 +60,20 @@ void blitText(FontManager *fm, SDL_Surface *dest, int x, int y, const char *text
     }
 }
 
-void drawStatusBar(SDL_Surface *dest, FontManager *fm, int x, int y, int w, int h, const char *label,
-                   unsigned cur, unsigned max, std::uint32_t fillArgb) {
+void blitHudText(const T4CUiFont *hudFont, FontManager *fm, SDL_Surface *dest, int x, int y, const char *text,
+                 std::uint32_t color) {
+    if (!dest || !text) {
+        return;
+    }
+    if (hudFont && hudFont->isReady()) {
+        hudFont->blitText(dest, x, y, text, argbToColor(color));
+        return;
+    }
+    blitText(fm, dest, x, y, text, color);
+}
+
+void drawStatusBar(SDL_Surface *dest, const T4CUiFont *hudFont, FontManager *fm, int x, int y, int w, int h,
+                   const char *label, unsigned cur, unsigned max, std::uint32_t fillArgb) {
     if (!dest || w <= 0 || h <= 0) {
         return;
     }
@@ -61,7 +88,22 @@ void drawStatusBar(SDL_Surface *dest, FontManager *fm, int x, int y, int w, int 
     }
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%s %u/%u", label, cur, max);
-    blitText(fm, dest, x + 4, y + 1, buf, 0xFFFFFFFF);
+    const int textY = y + (h > 20 ? 2 : 1);
+    blitHudText(hudFont, fm, dest, x + 6, textY, buf, 0xFFFFFFFF);
+}
+
+SDL_Surface *renderHudTextSurf(const T4CUiFont *hudFont, FontManager *fm, const char *text,
+                               std::uint32_t color) {
+    if (!text) {
+        return nullptr;
+    }
+    if (hudFont && hudFont->isReady()) {
+        return hudFont->renderTextSurface(text, argbToColor(color));
+    }
+    if (!fm) {
+        return nullptr;
+    }
+    return fm->get_text(const_cast<char *>(text), color);
 }
 
 void appendBagLines(const std::vector<T4CBagItem> &items, std::vector<std::string> *lines) {
@@ -327,6 +369,13 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
     optionsPopupOpen_ = false;
     optionsSelection_ = 0;
 
+#if defined(LINUX_PORT)
+    if (!hudFont_.init(kHudFontPt)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "[GameWorld] HUD TTF indisponible — repli FontManager bitmap (~12 px).");
+    }
+#endif
+
     mapFlag_ = true;
     dispInfos_ = false;
     ready_ = true;
@@ -449,6 +498,7 @@ void GameWorldScreen::Shutdown() {
     fm2_ = nullptr;
     delete fm_;
     fm_ = nullptr;
+    hudFont_.shutdown();
 
     if (screen_) {
         SDL_DestroySurface(screen_);
@@ -641,7 +691,7 @@ void GameWorldScreen::redraw() {
 #else
     snprintf(charloc, sizeof(charloc), "Loc %u,%u Z%u | FPS %.0f", locX_, locY_, zone_, fps_);
 #endif
-    if (SDL_Surface *txt_loc = fm_->get_text(charloc, 0xFFFFFFFF)) {
+    if (SDL_Surface *txt_loc = renderHudTextSurf(&hudFont_, fm_, charloc, 0xFFFFFFFF)) {
         SDL_BlitSurface(txt_loc, nullptr, screen_, nullptr);
         SDL_DestroySurface(txt_loc);
     }
@@ -649,15 +699,15 @@ void GameWorldScreen::redraw() {
 #if defined(LINUX_PORT)
     if (status.valid) {
         constexpr int barX = 0;
-        constexpr int barW = 220;
-        constexpr int barH = 14;
-        int barY = 18;
+        const int barW = hudFont_.isReady() ? kHudBarW : 220;
+        const int barH = hudFont_.isReady() ? kHudBarH : 14;
+        int barY = hudFont_.isReady() ? 34 : 18;
         if (active.valid && !active.name.empty()) {
-            barY = 22;
+            barY = hudFont_.isReady() ? 40 : 22;
         }
-        drawStatusBar(screen_, fm_, barX, barY, barW, barH, "PV", status.hp, status.maxHp, 0xFFCC3333);
-        drawStatusBar(screen_, fm_, barX, barY + barH + 2, barW, barH, "Mana", static_cast<unsigned>(status.mana),
-                      static_cast<unsigned>(status.maxMana), 0xFF3366CC);
+        drawStatusBar(screen_, &hudFont_, fm_, barX, barY, barW, barH, "PV", status.hp, status.maxHp, 0xFFCC3333);
+        drawStatusBar(screen_, &hudFont_, fm_, barX, barY + barH + 4, barW, barH, "Mana",
+                      static_cast<unsigned>(status.mana), static_cast<unsigned>(status.maxMana), 0xFF3366CC);
         char xpLine[64];
         if (status.xpToNextLevel > 0) {
             std::snprintf(xpLine, sizeof(xpLine), "XP %llu / %llu",
@@ -666,7 +716,7 @@ void GameWorldScreen::redraw() {
         } else {
             std::snprintf(xpLine, sizeof(xpLine), "XP %llu", static_cast<unsigned long long>(status.xp));
         }
-        blitText(fm_, screen_, barX + 4, barY + (barH + 2) * 2 + 2, xpLine, 0xFFCCCCCC);
+        blitHudText(&hudFont_, fm_, screen_, barX + 6, barY + (barH + 4) * 2 + 2, xpLine, 0xFFCCCCCC);
     }
 #endif
 
@@ -722,7 +772,7 @@ void GameWorldScreen::drawGroundObjectMarkers() {
         if (sx < -40 || sx > kLogicalWidth + 40 || sy < -20 || sy > kLogicalHeight + 20) {
             continue;
         }
-        blitText(fm_, screen_, sx - 8, sy - 16, "[]", 0xFF58E0FF);
+        blitHudText(&hudFont_, fm_, screen_, sx - 10, sy - 20, "[]", 0xFF58E0FF);
         ++drawn;
     }
 #endif
@@ -820,20 +870,21 @@ bool GameWorldScreen::ConsumeQuitApp() {
 }
 
 void GameWorldScreen::drawOptionsPopup() {
-    SDL_Rect panel{620, 320, 560, 280};
+    const bool hud = hudFont_.isReady();
+    SDL_Rect panel{560, 300, 680, 320};
     TnC_FillArgb(screen_, &panel, 0xC0182030);
 
     const int x = panel.x + 32;
-    int y = panel.y + 20;
-    blitText(fm_, screen_, x, y, "Options", 0xFFE8D080);
-    y += 36;
+    int y = panel.y + 24;
+    blitHudText(&hudFont_, fm_, screen_, x, y, "Options", 0xFFE8D080);
+    y += hud ? 44 : 36;
 
     static const char *kItems[] = {"Annuler", "Retour au login", "Quitter le jeu"};
     for (int i = 0; i < 3; ++i) {
         char line[64];
         snprintf(line, sizeof(line), "%s %s", optionsSelection_ == i ? ">" : " ", kItems[i]);
-        blitText(fm_, screen_, x + 16, y, line, optionsSelection_ == i ? 0xFF80FF80 : 0xFFCCCCCC);
-        y += 28;
+        blitHudText(&hudFont_, fm_, screen_, x + 16, y, line, optionsSelection_ == i ? 0xFF80FF80 : 0xFFCCCCCC);
+        y += hud ? 36 : 28;
     }
 }
 
@@ -961,6 +1012,11 @@ void GameWorldScreen::rebuildCharacterPanelCache() {
         return;
     }
 
+    const bool hud = hudFont_.isReady();
+    const int panelW = hud ? kHudPanelW : 420;
+    const int lineH = hud ? kHudLineH : 16;
+    const int maxLines = hud ? kHudPanelMaxLines : 18;
+
     std::vector<std::string> lines;
     const char *title = "?";
     if (characterPanel_ == 1) {
@@ -1027,22 +1083,18 @@ void GameWorldScreen::rebuildCharacterPanelCache() {
         }
     }
 
-    constexpr int panelW = 420;
-    constexpr int lineH = 16;
-    const int maxLines = 18;
     const int shown = static_cast<int>(std::min(lines.size(), static_cast<std::size_t>(maxLines)));
-    const int panelH = 28 + shown * lineH + 24;
+    const int panelH = (hud ? 40 : 28) + shown * lineH + (hud ? 36 : 24);
     panelRect_ = SDL_Rect{kLogicalWidth - panelW - 12, 48, panelW, panelH};
 
-    if (panelTitleSurf_ = fm_->get_text(const_cast<char *>(title), 0xFFCCDDFF)) {
-        /* keep */
-    }
-    int y = panelRect_.y + 26;
+    panelTitleSurf_ = renderHudTextSurf(&hudFont_, fm_, title, 0xFFCCDDFF);
+    int y = panelRect_.y + (hud ? 32 : 26);
     for (int i = 0; i < shown; ++i) {
         CharacterPanelGlyph g{};
-        g.x = panelRect_.x + 8;
+        g.x = panelRect_.x + 10;
         g.y = y;
-        if (SDL_Surface *s = fm_->get_text(const_cast<char *>(lines[static_cast<std::size_t>(i)].c_str()), 0xFFE8E8E8)) {
+        if (SDL_Surface *s =
+                renderHudTextSurf(&hudFont_, fm_, lines[static_cast<std::size_t>(i)].c_str(), 0xFFE8E8E8)) {
             g.surface = s;
             panelGlyphs_.push_back(g);
         }
@@ -1052,15 +1104,15 @@ void GameWorldScreen::rebuildCharacterPanelCache() {
         char more[48];
         std::snprintf(more, sizeof(more), "... +%zu", lines.size() - static_cast<std::size_t>(shown));
         CharacterPanelGlyph g{};
-        g.x = panelRect_.x + 8;
+        g.x = panelRect_.x + 10;
         g.y = y;
-        if (SDL_Surface *s = fm_->get_text(more, 0xFFAAAAAA)) {
+        if (SDL_Surface *s = renderHudTextSurf(&hudFont_, fm_, more, 0xFFAAAAAA)) {
             g.surface = s;
             panelGlyphs_.push_back(g);
         }
     }
-    panelFooterSurf_ = fm_->get_text(
-        const_cast<char *>("B sac K skills P sorts U coffre E equip Esc ferme | Maj+B/K/P refresh"), 0xFF888888);
+    panelFooterSurf_ = renderHudTextSurf(
+        &hudFont_, fm_, "B sac K skills P sorts U coffre E equip Esc ferme | Maj+B/K/P refresh", 0xFF888888);
 #else
     panelCacheDirty_ = false;
 #endif
@@ -1073,7 +1125,7 @@ void GameWorldScreen::drawCharacterPanel() {
     }
     TnC_FillArgb(screen_, &panelRect_, 0xD0182030);
     if (panelTitleSurf_) {
-        SDL_Rect dst{panelRect_.x + 8, panelRect_.y + 6, static_cast<int>(panelTitleSurf_->w),
+        SDL_Rect dst{panelRect_.x + 10, panelRect_.y + 8, static_cast<int>(panelTitleSurf_->w),
                      static_cast<int>(panelTitleSurf_->h)};
         SDL_BlitSurface(panelTitleSurf_, nullptr, screen_, &dst);
     }
@@ -1085,7 +1137,9 @@ void GameWorldScreen::drawCharacterPanel() {
         SDL_BlitSurface(g.surface, nullptr, screen_, &dst);
     }
     if (panelFooterSurf_) {
-        SDL_Rect dst{panelRect_.x + 8, panelRect_.y + panelRect_.h - 18, static_cast<int>(panelFooterSurf_->w),
+        const int footerY = hudFont_.isReady() ? panelRect_.y + panelRect_.h - 30
+                                               : panelRect_.y + panelRect_.h - 18;
+        SDL_Rect dst{panelRect_.x + 10, footerY, static_cast<int>(panelFooterSurf_->w),
                      static_cast<int>(panelFooterSurf_->h)};
         SDL_BlitSurface(panelFooterSurf_, nullptr, screen_, &dst);
     }

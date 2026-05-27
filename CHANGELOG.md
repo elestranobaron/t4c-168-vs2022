@@ -180,6 +180,31 @@ Ne **pas** mélanger IP Vircom (`.WDA`, dumps txt données, `data/`) et code GPL
 
 ---
 
+## 2026-05-26 — HUD monde TTF lisible (overlay)
+
+**Famille :** **UI / social** · **Perso / ODBC**.
+
+### 2026-05-26 — Barres + panneaux B/K/P/E/U en T4CUiFont (~24 pt)
+
+**Problème :** HUD monde dessiné avec `FontManager` bitmap ~12 px sur canvas **1800×1000** → barres 14 px et panneaux illisibles.
+
+**Solution :** overlay TTF (`t4cbeaulieux.ttf`, même stack que le launcher) sur `screen_` avant `present` :
+
+| Élément | Avant | Après |
+|---------|-------|-------|
+| Ligne perso / debug | bitmap 12 px | TTF **24 pt** |
+| Barres PV / mana | 220×14 px | **400×28 px** |
+| Panneaux sac/skills/sorts/coffre/équip | 420 px, lineH 16 | **540 px**, lineH **30** |
+| Popup Options | bitmap | TTF |
+
+**Repli :** si `t4cbeaulieux.ttf` absent, retour automatique au bitmap `FontManager`.
+
+**API :** `T4CUiFont::renderTextSurface`, `blitText` (surface RGBA32 pour blit sur `screen_`).
+
+**Fichiers :** `T4CUiFont.{cpp,h}`, `GameWorldScreen.{cpp,h}`.
+
+---
+
 ## 2026-05-26 — HUD stats perso (opcode 43 / 33 / 37 / 44 / 67)
 
 **Famille :** **Perso / ODBC**.

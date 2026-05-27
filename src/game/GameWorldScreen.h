@@ -10,6 +10,7 @@
 
 #include "Sdl3FramePresenter.h"
 
+#include "gui/T4CUiFont.h"
 #include "gui/WorldSideMenu.h"
 
 class FontManager;
@@ -96,6 +97,7 @@ class GameWorldScreen {
     MAPInterface *mapi_{nullptr};
     FontManager *fm_{nullptr};
     FontManager *fm2_{nullptr};
+    T4CUiFont hudFont_;
     TextManager *txtm_{nullptr};
     NPCManager *npcm_{nullptr};
 

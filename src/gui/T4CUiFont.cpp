@@ -72,13 +72,43 @@ void T4CUiFont::measureText(const char *text, int *outW, int *outH) const {
     TTF_GetStringSize(font_, text, std::strlen(text), outW, outH);
 }
 
+SDL_Surface *T4CUiFont::renderTextSurface(const char *text, const SDL_Color color) const {
+    if (!font_ || !text || !*text) {
+        return nullptr;
+    }
+    const size_t len = std::strlen(text);
+    SDL_Surface *surf = TTF_RenderText_Blended(font_, text, len, color);
+    if (!surf) {
+        return nullptr;
+    }
+    if (surf->format != SDL_PIXELFORMAT_RGBA32) {
+        SDL_Surface *converted = SDL_ConvertSurface(surf, SDL_PIXELFORMAT_RGBA32);
+        SDL_DestroySurface(surf);
+        return converted;
+    }
+    return surf;
+}
+
+void T4CUiFont::blitText(SDL_Surface *dest, const int x, const int y, const char *text,
+                         const SDL_Color color) const {
+    if (!dest) {
+        return;
+    }
+    SDL_Surface *surf = renderTextSurface(text, color);
+    if (!surf) {
+        return;
+    }
+    SDL_Rect dst{x, y, static_cast<int>(surf->w), static_cast<int>(surf->h)};
+    SDL_BlitSurface(surf, nullptr, dest, &dst);
+    SDL_DestroySurface(surf);
+}
+
 void T4CUiFont::drawText(SDL_Renderer *renderer, const char *text, const float x, const float y,
                          const SDL_Color color) const {
     if (!renderer || !font_ || !text || !*text) {
         return;
     }
-    const size_t len = std::strlen(text);
-    SDL_Surface *surf = TTF_RenderText_Blended(font_, text, len, color);
+    SDL_Surface *surf = renderTextSurface(text, color);
     if (!surf) {
         return;
     }

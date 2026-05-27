@@ -20,6 +20,11 @@ class T4CUiFont {
 
     void drawText(SDL_Renderer *renderer, const char *text, float x, float y, SDL_Color color) const;
 
+    /** Surface RGBA32 — le caller doit SDL_DestroySurface. */
+    SDL_Surface *renderTextSurface(const char *text, SDL_Color color) const;
+
+    void blitText(SDL_Surface *dest, int x, int y, const char *text, SDL_Color color) const;
+
     void measureText(const char *text, int *outW, int *outH) const;
 
     TTF_Font *handle() const { return font_; }
