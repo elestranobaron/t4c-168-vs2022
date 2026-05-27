@@ -180,6 +180,49 @@ Ne **pas** mélanger IP Vircom (`.WDA`, dumps txt données, `data/`) et code GPL
 
 ---
 
+## 2026-05-27 — Sac graphique VSF (base) + correctif SideMenu
+
+**Famille :** **UI / social** · **Perso / ODBC**.
+
+### 2026-05-27 — Panel backpack VSF (première passe)
+
+**Ajout :**
+
+| Élément | Détail |
+|---------|--------|
+| `WorldBackpackPanel` | Fond `BackPack` / `BackpackOutline`, grille **9×6** (cases 26 px), icônes `64kInv*` |
+| `T4CInvItemIconMap.gen.cpp` | Table **appearance → nom sprite** (~459 entrées), extraite des `BIND_INV` de `VisualObjectList.cpp` |
+| Touche **B** | Ouvre le panel graphique (opcode **18** inchangé) |
+| Side menu **BackPack** | Ouvre le même panel puis ferme la barre latérale |
+
+**Génération offline (pas de Python au runtime) :**
+
+```bash
+python3 scripts/generate_t4c_inv_icon_map.py
+```
+
+Régénère `src/gui/T4CInvItemIconMap.gen.cpp` si la table Windows change.
+
+**Limites connues :**
+
+- Pas encore drag & drop / use item / équipement graphique.
+- Side menu : bande « carte pixelisée » par transparence du sprite — correctif fond opaque ci-dessous.
+- Boutons side menu hors Options/BackPack → toujours placeholder.
+
+**Fichiers :** `WorldBackpackPanel.{cpp,h}`, `T4CInvItemIcons.{cpp,h}`, `T4CInvItemIconMap.gen.cpp`, `scripts/generate_t4c_inv_icon_map.py`, `GameWorldScreen.{cpp,h}`, `WorldSideMenu.{cpp,h}`, `cmake/TncGraphical.cmake`.
+
+### 2026-05-27 — SideMenu : fond opaque anti-chevauchement carte
+
+**Symptôme :** barre latérale (Esc) recouverte à moitié par la carte isométrique visible à travers les zones transparentes de `64kSideBox` → aspect « bande pixelisée ».
+
+**Correctif :** remplissage opaque `0xFF101820` sur toute la colonne gauche (`columnWidth()`) avant blit box/boutons ; `startOffsetX()` = largeur colonne réelle.
+
+**Reste à faire (chantier séparé) :** minimap TMI Windows (`SideMenu::m_MainTMI`) non portée.
+
+**Fichiers :** `WorldSideMenu.{cpp,h}`.
+
+---
+
 ## 2026-05-26 — HUD monde TTF lisible (overlay)
 
 **Famille :** **UI / social** · **Perso / ODBC**.

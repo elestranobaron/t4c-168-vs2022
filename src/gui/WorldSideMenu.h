@@ -47,17 +47,18 @@ class WorldSideMenu {
     };
 
     struct _sprite *buttonSprite(const char *suffix, bool down) const;
-    void layoutButtons();
+    void layoutButtons() const;
+    int columnWidth() const;
 
     VSFInterface *vsfi_{nullptr};
     struct _sprite *box_{nullptr};
-    ButtonSlot buttons_[7]{};
+    mutable ButtonSlot buttons_[7]{};
     int screenW_{0};
     int screenH_{0};
-    int originX_{0};
-    int originY_{0};
+    mutable int originX_{0};
+    mutable int originY_{0};
     int hoverIndex_{-1};
     int pressedIndex_{-1};
     bool open_{false};
-    bool layoutDone_{false};
+    mutable bool layoutDone_{false};
 };

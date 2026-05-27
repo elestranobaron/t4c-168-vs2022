@@ -1,5 +1,7 @@
 #include "gui/WorldSideMenu.h"
 
+#include "tnc_sdl3.h"
+
 #include <VSFInterface/vsfinterface.h>
 
 #include <algorithm>
@@ -46,10 +48,10 @@ void WorldSideMenu::setOpen(const bool open) {
 }
 
 int WorldSideMenu::startOffsetX() const {
-    if (!open_ || !box_ || !box_->sdl_sprite) {
+    if (!open_) {
         return 0;
     }
-    return box_->sdl_sprite->w;
+    return columnWidth();
 }
 
 struct _sprite *WorldSideMenu::buttonSprite(const char *suffix, const bool down) const {
@@ -61,7 +63,7 @@ struct _sprite *WorldSideMenu::buttonSprite(const char *suffix, const bool down)
     return vsfi_->get_sprite_by_name(name);
 }
 
-void WorldSideMenu::layoutButtons() {
+void WorldSideMenu::layoutButtons() const {
     if (layoutDone_) {
         return;
     }
@@ -88,11 +90,27 @@ void WorldSideMenu::layoutButtons() {
     }
 }
 
+int WorldSideMenu::columnWidth() const {
+    layoutButtons();
+    int w = 0;
+    if (box_ && box_->sdl_sprite) {
+        w = std::max(w, static_cast<int>(box_->sdl_sprite->w));
+    }
+    for (int i = 0; i < kButtonCount; ++i) {
+        w = std::max(w, buttons_[i].rect.x + buttons_[i].rect.w);
+    }
+    return w > 0 ? w : 64;
+}
+
 void WorldSideMenu::draw(SDL_Surface *dest) {
     if (!open_ || !dest || !vsfi_) {
         return;
     }
     layoutButtons();
+
+    const int colW = columnWidth();
+    SDL_Rect backdrop{0, 0, colW, screenH_};
+    TnC_FillArgb(dest, &backdrop, 0xFF101820);
 
     if (box_ && box_->sdl_sprite) {
         SDL_Rect dst{originX_, originY_, box_->sdl_sprite->w, box_->sdl_sprite->h};

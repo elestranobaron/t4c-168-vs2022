@@ -1206,6 +1206,7 @@ bool GameWorldScreen::handleSideMenuMouse(const SDL_Event &event) {
         return true;
     }
     if (action == WorldSideMenu::Action::OpenBackPack) {
+        sideMenu_.setOpen(false);
         toggleCharacterPanel(1, false);
         return true;
     }
