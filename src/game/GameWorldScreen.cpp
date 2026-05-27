@@ -366,6 +366,7 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
 
     sideMenu_.init(vsfi_, kLogicalWidth, kLogicalHeight);
     sideMenu_.setOpen(false);
+    backpackPanel_.init(vsfi_, kLogicalWidth, kLogicalHeight);
     optionsPopupOpen_ = false;
     optionsSelection_ = 0;
 
@@ -721,7 +722,13 @@ void GameWorldScreen::redraw() {
 #endif
 
     if (characterPanel_ != 0) {
-        drawCharacterPanel();
+        if (characterPanel_ == 1) {
+            T4CPlayerBackpack bp{};
+            T4CLoginSessionGetBackpack(&bp);
+            backpackPanel_.draw(screen_, bp.items, &hudFont_, fm_);
+        } else {
+            drawCharacterPanel();
+        }
     }
 
     if (sideMenu_.isOpen()) {
@@ -814,7 +821,7 @@ void GameWorldScreen::Update() {
             characterPanel_ = 4;
         }
     }
-    if (characterPanel_ != 0 && panelCacheDirty_) {
+    if (characterPanel_ != 0 && panelCacheDirty_ && characterPanel_ != 1) {
         rebuildCharacterPanelCache();
     }
     if (characterPanel_ == 1) {
@@ -969,6 +976,7 @@ void GameWorldScreen::toggleCharacterPanel(const int kind, const bool forceRefre
     if (characterPanel_ == kind) {
         characterPanel_ = 0;
         freeCharacterPanelCache();
+        backpackPanel_.clearHover();
         return;
     }
     characterPanel_ = kind;
@@ -1148,6 +1156,25 @@ void GameWorldScreen::drawCharacterPanel() {
 #endif
 }
 
+bool GameWorldScreen::handleBackpackPanelMouse(const SDL_Event &event) {
+    SDL_Event ev = event;
+    if (renderer_) {
+        SDL_ConvertEventToRenderCoordinates(renderer_, &ev);
+    }
+    int mx = 0;
+    int my = 0;
+    if (event.type == SDL_EVENT_MOUSE_MOTION) {
+        mx = static_cast<int>(ev.motion.x);
+        my = static_cast<int>(ev.motion.y);
+        backpackPanel_.updateMouse(mx, my);
+        return true;
+    }
+    mx = static_cast<int>(ev.button.x);
+    my = static_cast<int>(ev.button.y);
+    backpackPanel_.updateMouse(mx, my);
+    return true;
+}
+
 bool GameWorldScreen::handleSideMenuMouse(const SDL_Event &event) {
     SDL_Event ev = event;
     if (renderer_) {
@@ -1176,6 +1203,10 @@ bool GameWorldScreen::handleSideMenuMouse(const SDL_Event &event) {
     if (action == WorldSideMenu::Action::OpenOptions) {
         optionsPopupOpen_ = true;
         optionsSelection_ = 0;
+        return true;
+    }
+    if (action == WorldSideMenu::Action::OpenBackPack) {
+        toggleCharacterPanel(1, false);
         return true;
     }
     if (action == WorldSideMenu::Action::PanelNotImplemented) {
@@ -1231,6 +1262,9 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
         if (sideMenu_.isOpen()) {
             return handleSideMenuMouse(event);
         }
+        if (characterPanel_ == 1) {
+            return handleBackpackPanelMouse(event);
+        }
         if (handleWorldClickMove(event)) {
             return true;
         }
@@ -1275,6 +1309,7 @@ bool GameWorldScreen::HandleEvent(const SDL_Event &event) {
     if (characterPanel_ != 0 && keyPressed(event, SDLK_ESCAPE, SDL_SCANCODE_ESCAPE)) {
         characterPanel_ = 0;
         freeCharacterPanelCache();
+        backpackPanel_.clearHover();
         return true;
     }
 

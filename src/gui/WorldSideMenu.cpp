@@ -139,6 +139,9 @@ WorldSideMenu::Action WorldSideMenu::handleMouse(const int mx, const int my, con
             if (buttons_[i].panel == Panel::Options) {
                 return Action::OpenOptions;
             }
+            if (buttons_[i].panel == Panel::BackPack) {
+                return Action::OpenBackPack;
+            }
             return Action::PanelNotImplemented;
         }
         break;

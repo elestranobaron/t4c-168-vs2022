@@ -21,6 +21,7 @@ class WorldSideMenu {
         None,
         PanelNotImplemented,
         OpenOptions,
+        OpenBackPack,
     };
 
     void init(VSFInterface *vsf, int screenW, int screenH);

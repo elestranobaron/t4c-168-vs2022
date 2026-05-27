@@ -63,5 +63,8 @@ set(TNC_GRAPHICAL_CLIENT_SOURCES
     ${CMAKE_SOURCE_DIR}/src/game/GameWorldScreen.cpp
     ${CMAKE_SOURCE_DIR}/src/game/TncDataPaths.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/WorldSideMenu.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/WorldBackpackPanel.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/T4CInvItemIcons.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/T4CInvItemIconMap.gen.cpp
     ${TNC_GRAPHICAL_ROOT}/render/Sdl3FramePresenter.cpp
 )

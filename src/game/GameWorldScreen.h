@@ -11,6 +11,7 @@
 #include "Sdl3FramePresenter.h"
 
 #include "gui/T4CUiFont.h"
+#include "gui/WorldBackpackPanel.h"
 #include "gui/WorldSideMenu.h"
 
 class FontManager;
@@ -79,6 +80,7 @@ class GameWorldScreen {
     bool handleSideMenuKey(const SDL_Event &event);
     bool handleOptionsPopupKey(const SDL_Event &event);
     bool handleSideMenuMouse(const SDL_Event &event);
+    bool handleBackpackPanelMouse(const SDL_Event &event);
     void freeCharacterPanelCache();
     void rebuildCharacterPanelCache();
     void drawCharacterPanel();
@@ -118,6 +120,7 @@ class GameWorldScreen {
     bool optionsPopupOpen_{false};
     int optionsSelection_{0};
     WorldSideMenu sideMenu_;
+    WorldBackpackPanel backpackPanel_;
     bool playerNpcSpawned_{false};
     std::unordered_set<std::int32_t> remoteUnitIds_;
     std::unordered_map<std::int32_t, std::pair<unsigned int, unsigned int>> remotePositions_;
