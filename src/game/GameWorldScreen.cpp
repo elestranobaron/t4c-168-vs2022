@@ -878,7 +878,7 @@ bool GameWorldScreen::ConsumeQuitApp() {
 
 void GameWorldScreen::drawOptionsPopup() {
     const bool hud = hudFont_.isReady();
-    SDL_Rect panel{560, 300, 680, 320};
+    SDL_Rect panel{560, 260, 680, 420};
     TnC_FillArgb(screen_, &panel, 0xC0182030);
 
     const int x = panel.x + 32;
@@ -886,10 +886,19 @@ void GameWorldScreen::drawOptionsPopup() {
     blitHudText(&hudFont_, fm_, screen_, x, y, "Options", 0xFFE8D080);
     y += hud ? 44 : 36;
 
-    static const char *kItems[] = {"Annuler", "Retour au login", "Quitter le jeu"};
-    for (int i = 0; i < 3; ++i) {
-        char line[64];
-        snprintf(line, sizeof(line), "%s %s", optionsSelection_ == i ? ">" : " ", kItems[i]);
+    static const char *kItems[] = {"Musique", "Sons", "Annuler", "Retour au login", "Quitter le jeu"};
+    constexpr int kItemCount = 5;
+    for (int i = 0; i < kItemCount; ++i) {
+        char line[96];
+        if (i == 0) {
+            std::snprintf(line, sizeof(line), "%s Musique : %3d%%  (gauche/droite)", optionsSelection_ == i ? ">" : " ",
+                          static_cast<int>(T4CGameMusic::GetVolume() * 100.f + 0.5f));
+        } else if (i == 1) {
+            std::snprintf(line, sizeof(line), "%s Sons    : %3d%%  (gauche/droite)", optionsSelection_ == i ? ">" : " ",
+                          static_cast<int>(T4CGameMusic::GetSfxVolume() * 100.f + 0.5f));
+        } else {
+            std::snprintf(line, sizeof(line), "%s %s", optionsSelection_ == i ? ">" : " ", kItems[i]);
+        }
         blitHudText(&hudFont_, fm_, screen_, x + 16, y, line, optionsSelection_ == i ? 0xFF80FF80 : 0xFFCCCCCC);
         y += hud ? 36 : 28;
     }
@@ -900,6 +909,8 @@ bool GameWorldScreen::handleOptionsPopupKey(const SDL_Event &event) {
         return true;
     }
 
+    constexpr int kItemCount = 5;
+
     if (keyPressed(event, SDLK_ESCAPE, SDL_SCANCODE_ESCAPE)) {
         optionsPopupOpen_ = false;
         optionsSelection_ = 0;
@@ -907,11 +918,34 @@ bool GameWorldScreen::handleOptionsPopupKey(const SDL_Event &event) {
     }
 
     if (keyPressed(event, SDLK_UP, SDL_SCANCODE_UP)) {
-        optionsSelection_ = (optionsSelection_ + 2) % 3;
+        optionsSelection_ = (optionsSelection_ + kItemCount - 1) % kItemCount;
         return true;
     }
     if (keyPressed(event, SDLK_DOWN, SDL_SCANCODE_DOWN)) {
-        optionsSelection_ = (optionsSelection_ + 1) % 3;
+        optionsSelection_ = (optionsSelection_ + 1) % kItemCount;
+        return true;
+    }
+
+    if (optionsSelection_ == 0 &&
+        (keyPressed(event, SDLK_LEFT, SDL_SCANCODE_LEFT) || keyPressed(event, SDLK_MINUS, SDL_SCANCODE_MINUS))) {
+        T4CGameMusic::SetVolume(T4CGameMusic::GetVolume() - 0.05f);
+        return true;
+    }
+    if (optionsSelection_ == 0 &&
+        (keyPressed(event, SDLK_RIGHT, SDL_SCANCODE_RIGHT) || keyPressed(event, SDLK_EQUALS, SDL_SCANCODE_EQUALS) ||
+         keyPressed(event, SDLK_PLUS, SDL_SCANCODE_KP_PLUS))) {
+        T4CGameMusic::SetVolume(T4CGameMusic::GetVolume() + 0.05f);
+        return true;
+    }
+    if (optionsSelection_ == 1 &&
+        (keyPressed(event, SDLK_LEFT, SDL_SCANCODE_LEFT) || keyPressed(event, SDLK_MINUS, SDL_SCANCODE_MINUS))) {
+        T4CGameMusic::SetSfxVolume(T4CGameMusic::GetSfxVolume() - 0.05f);
+        return true;
+    }
+    if (optionsSelection_ == 1 &&
+        (keyPressed(event, SDLK_RIGHT, SDL_SCANCODE_RIGHT) || keyPressed(event, SDLK_EQUALS, SDL_SCANCODE_EQUALS) ||
+         keyPressed(event, SDLK_PLUS, SDL_SCANCODE_KP_PLUS))) {
+        T4CGameMusic::SetSfxVolume(T4CGameMusic::GetSfxVolume() + 0.05f);
         return true;
     }
 
@@ -922,15 +956,18 @@ bool GameWorldScreen::handleOptionsPopupKey(const SDL_Event &event) {
 
     switch (optionsSelection_) {
         case 0:
+        case 1:
+            break;
+        case 2:
             optionsPopupOpen_ = false;
             optionsSelection_ = 0;
             break;
-        case 1:
+        case 3:
             optionsPopupOpen_ = false;
             sideMenu_.setOpen(false);
             returnToLogin_ = true;
             break;
-        case 2:
+        case 4:
             optionsPopupOpen_ = false;
             sideMenu_.setOpen(false);
             quitApp_ = true;
@@ -1005,6 +1042,12 @@ void GameWorldScreen::toggleCharacterPanel(const int kind, const bool forceRefre
         T4CLoginSessionGetEquipment(&eq);
         if (forceRefresh || !eq.valid) {
             T4CLoginSessionRequestViewEquipped();
+        }
+    } else if (kind == 6) {
+        T4CPlayerStatus st{};
+        T4CLoginSessionGetPlayerStatus(&st);
+        if (forceRefresh || !st.valid) {
+            T4CLoginSessionRequestPlayerStatus();
         }
     }
 #else
@@ -1088,6 +1131,46 @@ void GameWorldScreen::rebuildCharacterPanelCache() {
                 std::snprintf(buf, sizeof(buf), "%-9s %s", kSlotNames[i], name);
                 lines.emplace_back(buf);
             }
+        }
+    } else if (characterPanel_ == 6) {
+        title = "Fiche perso (43)";
+        T4CActivePlayer active{};
+        T4CPlayerStatus st{};
+        T4CLoginSessionGetActivePlayer(&active);
+        T4CLoginSessionGetPlayerStatus(&st);
+        if (active.valid && !active.name.empty()) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "Nom : %s", active.name.c_str());
+            lines.emplace_back(buf);
+        }
+        if (st.valid) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "Niv %u  AC %u", static_cast<unsigned>(st.level),
+                          static_cast<unsigned>(st.ac));
+            lines.emplace_back(buf);
+            std::snprintf(buf, sizeof(buf), "PV %u / %u", st.hp, st.maxHp);
+            lines.emplace_back(buf);
+            std::snprintf(buf, sizeof(buf), "Mana %u / %u", static_cast<unsigned>(st.mana),
+                          static_cast<unsigned>(st.maxMana));
+            lines.emplace_back(buf);
+            std::snprintf(buf, sizeof(buf), "FOR %u  END %u  AGI %u", static_cast<unsigned>(st.str),
+                          static_cast<unsigned>(st.end), static_cast<unsigned>(st.agi));
+            lines.emplace_back(buf);
+            std::snprintf(buf, sizeof(buf), "SAG %u  INT %u", static_cast<unsigned>(st.wis),
+                          static_cast<unsigned>(st.intel));
+            lines.emplace_back(buf);
+            std::snprintf(buf, sizeof(buf), "Poids %u / %u", static_cast<unsigned>(st.weight),
+                          static_cast<unsigned>(st.maxWeight));
+            lines.emplace_back(buf);
+            if (st.xpToNextLevel > 0) {
+                std::snprintf(buf, sizeof(buf), "XP %llu / %llu", static_cast<unsigned long long>(st.xp),
+                              static_cast<unsigned long long>(st.xpToNextLevel));
+            } else {
+                std::snprintf(buf, sizeof(buf), "XP %llu", static_cast<unsigned long long>(st.xp));
+            }
+            lines.emplace_back(buf);
+        } else {
+            lines.emplace_back("(stats non recues — reouvrir le panneau)");
         }
     }
 
@@ -1206,8 +1289,15 @@ bool GameWorldScreen::handleSideMenuMouse(const SDL_Event &event) {
         return true;
     }
     if (action == WorldSideMenu::Action::OpenBackPack) {
-        sideMenu_.setOpen(false);
         toggleCharacterPanel(1, false);
+        return true;
+    }
+    if (action == WorldSideMenu::Action::OpenCharSheet) {
+        toggleCharacterPanel(6, false);
+        return true;
+    }
+    if (action == WorldSideMenu::Action::OpenSpellBook) {
+        toggleCharacterPanel(3, false);
         return true;
     }
     if (action == WorldSideMenu::Action::PanelNotImplemented) {

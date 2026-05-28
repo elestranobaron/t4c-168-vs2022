@@ -4,7 +4,7 @@
 
 class VSFInterface;
 
-/** Barre laterale T4C (sprites 64kSideBox / 64kSideButton*). */
+/** Barre laterale T4C (sprite 64kSideBox — icônes dans le cadre, hitboxes invisibles). */
 class WorldSideMenu {
    public:
     enum class Panel {
@@ -22,6 +22,8 @@ class WorldSideMenu {
         PanelNotImplemented,
         OpenOptions,
         OpenBackPack,
+        OpenCharSheet,
+        OpenSpellBook,
     };
 
     void init(VSFInterface *vsf, int screenW, int screenH);
@@ -41,24 +43,21 @@ class WorldSideMenu {
 
    private:
     struct ButtonSlot {
-        const char *suffix{nullptr};
         Panel panel{Panel::SpellBook};
         SDL_Rect rect{};
     };
 
-    struct _sprite *buttonSprite(const char *suffix, bool down) const;
-    void layoutButtons() const;
-    int columnWidth() const;
+    void layoutButtons();
 
     VSFInterface *vsfi_{nullptr};
     struct _sprite *box_{nullptr};
-    mutable ButtonSlot buttons_[7]{};
+    ButtonSlot buttons_[7]{};
     int screenW_{0};
     int screenH_{0};
-    mutable int originX_{0};
-    mutable int originY_{0};
+    int originX_{0};
+    int originY_{0};
     int hoverIndex_{-1};
     int pressedIndex_{-1};
     bool open_{false};
-    mutable bool layoutDone_{false};
+    bool layoutDone_{false};
 };

@@ -19,6 +19,11 @@ class T4CGameMusic {
     static void Reset();
 
     static void SetVolume(float gain0to1);
+    static float GetVolume();
+
+    /** Volume effets (stub — applique quand le pipeline SFX sera branche). */
+    static void SetSfxVolume(float gain0to1);
+    static float GetSfxVolume();
 
    private:
     T4CGameMusic() = delete;

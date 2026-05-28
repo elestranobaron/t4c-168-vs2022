@@ -1,29 +1,29 @@
 #include "gui/WorldSideMenu.h"
 
-#include "tnc_sdl3.h"
-
 #include <VSFInterface/vsfinterface.h>
 
 #include <algorithm>
-#include <cstdio>
 
 namespace {
 
 constexpr int kButtonCount = 7;
 
-struct ButtonDef {
-    const char *suffix;
-    WorldSideMenu::Panel panel;
-};
+/** Encoches Y dans 64kSideBox (68x480) — icônes déjà peintes dans le cadre. */
+constexpr int kSlotY[kButtonCount] = {2, 49, 87, 284, 322, 353, 388};
 
-constexpr ButtonDef kButtonDefs[kButtonCount] = {
-    {"SpellBook", WorldSideMenu::Panel::SpellBook},
-    {"Options", WorldSideMenu::Panel::Options},
-    {"Macros", WorldSideMenu::Panel::Macros},
-    {"GroupPlay", WorldSideMenu::Panel::GroupPlay},
-    {"Chatters", WorldSideMenu::Panel::Chatters},
-    {"CharSheet", WorldSideMenu::Panel::CharSheet},
-    {"BackPack", WorldSideMenu::Panel::BackPack},
+constexpr int kBtnInsetX = 6;
+constexpr int kHitW = 40;
+constexpr int kHitH = 38;
+
+/** Ordre visuel haut → bas sur le cadre (mesuré sur export BMP + retours in-game). */
+constexpr WorldSideMenu::Panel kSlotPanel[kButtonCount] = {
+    WorldSideMenu::Panel::CharSheet,
+    WorldSideMenu::Panel::BackPack,
+    WorldSideMenu::Panel::SpellBook,
+    WorldSideMenu::Panel::Options,
+    WorldSideMenu::Panel::Macros,
+    WorldSideMenu::Panel::GroupPlay,
+    WorldSideMenu::Panel::Chatters,
 };
 
 bool pointInRect(int x, int y, const SDL_Rect &r) {
@@ -48,22 +48,13 @@ void WorldSideMenu::setOpen(const bool open) {
 }
 
 int WorldSideMenu::startOffsetX() const {
-    if (!open_) {
+    if (!open_ || !box_ || !box_->sdl_sprite) {
         return 0;
     }
-    return columnWidth();
+    return box_->sdl_sprite->w;
 }
 
-struct _sprite *WorldSideMenu::buttonSprite(const char *suffix, const bool down) const {
-    if (!vsfi_ || !suffix) {
-        return nullptr;
-    }
-    char name[80];
-    std::snprintf(name, sizeof(name), "64kSideButton%s%s", down ? "Down" : "HighLight", suffix);
-    return vsfi_->get_sprite_by_name(name);
-}
-
-void WorldSideMenu::layoutButtons() const {
+void WorldSideMenu::layoutButtons() {
     if (layoutDone_) {
         return;
     }
@@ -75,31 +66,11 @@ void WorldSideMenu::layoutButtons() const {
         originY_ = std::max(0, (screenH_ - box_->sdl_sprite->h) / 2);
     }
 
-    struct _sprite *sample = buttonSprite(kButtonDefs[0].suffix, false);
-    const int btnW = (sample && sample->sdl_sprite) ? sample->sdl_sprite->w : 48;
-    const int btnH = (sample && sample->sdl_sprite) ? sample->sdl_sprite->h : 42;
-
-    const int boxH = (box_ && box_->sdl_sprite) ? box_->sdl_sprite->h : btnH * kButtonCount;
-    const int totalBtnH = btnH * kButtonCount;
-    int startY = originY_ + std::max(0, (boxH - totalBtnH) / 2);
-
     for (int i = 0; i < kButtonCount; ++i) {
-        buttons_[i].suffix = kButtonDefs[i].suffix;
-        buttons_[i].panel = kButtonDefs[i].panel;
-        buttons_[i].rect = SDL_Rect{originX_, startY + i * btnH, btnW, btnH};
+        buttons_[i].panel = kSlotPanel[i];
+        buttons_[i].rect =
+            SDL_Rect{originX_ + kBtnInsetX, originY_ + kSlotY[i], kHitW, kHitH};
     }
-}
-
-int WorldSideMenu::columnWidth() const {
-    layoutButtons();
-    int w = 0;
-    if (box_ && box_->sdl_sprite) {
-        w = std::max(w, static_cast<int>(box_->sdl_sprite->w));
-    }
-    for (int i = 0; i < kButtonCount; ++i) {
-        w = std::max(w, buttons_[i].rect.x + buttons_[i].rect.w);
-    }
-    return w > 0 ? w : 64;
 }
 
 void WorldSideMenu::draw(SDL_Surface *dest) {
@@ -108,31 +79,9 @@ void WorldSideMenu::draw(SDL_Surface *dest) {
     }
     layoutButtons();
 
-    const int colW = columnWidth();
-    SDL_Rect backdrop{0, 0, colW, screenH_};
-    TnC_FillArgb(dest, &backdrop, 0xFF101820);
-
     if (box_ && box_->sdl_sprite) {
         SDL_Rect dst{originX_, originY_, box_->sdl_sprite->w, box_->sdl_sprite->h};
         SDL_BlitSurface(box_->sdl_sprite, nullptr, dest, &dst);
-    }
-
-    for (int i = 0; i < kButtonCount; ++i) {
-        const ButtonSlot &b = buttons_[i];
-        const bool down = (i == pressedIndex_);
-        const bool hot = (i == hoverIndex_) && !down;
-        struct _sprite *spr = buttonSprite(b.suffix, down);
-        if (!spr || !spr->sdl_sprite) {
-            spr = buttonSprite(b.suffix, false);
-        }
-        if (!spr || !spr->sdl_sprite) {
-            continue;
-        }
-        SDL_Rect dst{b.rect.x, b.rect.y, spr->sdl_sprite->w, spr->sdl_sprite->h};
-        SDL_BlitSurface(spr->sdl_sprite, nullptr, dest, &dst);
-        if (hot && i != pressedIndex_) {
-            (void)hot;
-        }
     }
 }
 
@@ -154,13 +103,18 @@ WorldSideMenu::Action WorldSideMenu::handleMouse(const int mx, const int my, con
         }
         if (leftUp && pressedIndex_ == i) {
             pressedIndex_ = -1;
-            if (buttons_[i].panel == Panel::Options) {
-                return Action::OpenOptions;
+            switch (buttons_[i].panel) {
+                case Panel::Options:
+                    return Action::OpenOptions;
+                case Panel::BackPack:
+                    return Action::OpenBackPack;
+                case Panel::CharSheet:
+                    return Action::OpenCharSheet;
+                case Panel::SpellBook:
+                    return Action::OpenSpellBook;
+                default:
+                    return Action::PanelNotImplemented;
             }
-            if (buttons_[i].panel == Panel::BackPack) {
-                return Action::OpenBackPack;
-            }
-            return Action::PanelNotImplemented;
         }
         break;
     }

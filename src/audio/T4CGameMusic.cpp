@@ -25,6 +25,7 @@ MusicStreamState g_music{};
 int g_currentTrackId = -1;
 int g_oldTrackId = -1;
 float g_volumeGain = 0.75f;
+float g_sfxVolumeGain = 0.75f;
 bool g_audioReady = false;
 
 void FreeWav(MusicStreamState &st) {
@@ -219,4 +220,19 @@ void T4CGameMusic::SetVolume(const float gain0to1) {
     if (g_music.stream) {
         SDL_SetAudioStreamGain(g_music.stream, g_volumeGain);
     }
+}
+
+float T4CGameMusic::GetVolume() {
+    std::lock_guard<std::mutex> lock(g_musicMutex);
+    return g_volumeGain;
+}
+
+void T4CGameMusic::SetSfxVolume(const float gain0to1) {
+    std::lock_guard<std::mutex> lock(g_musicMutex);
+    g_sfxVolumeGain = std::clamp(gain0to1, 0.0f, 1.0f);
+}
+
+float T4CGameMusic::GetSfxVolume() {
+    std::lock_guard<std::mutex> lock(g_musicMutex);
+    return g_sfxVolumeGain;
 }

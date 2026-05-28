@@ -180,7 +180,7 @@ Ne **pas** mélanger IP Vircom (`.WDA`, dumps txt données, `data/`) et code GPL
 
 ---
 
-## 2026-05-27 — Sac graphique VSF (base) + correctif SideMenu
+## 2026-05-27 — Sac graphique VSF (base)
 
 **Famille :** **UI / social** · **Perso / ODBC**.
 
@@ -193,7 +193,7 @@ Ne **pas** mélanger IP Vircom (`.WDA`, dumps txt données, `data/`) et code GPL
 | `WorldBackpackPanel` | Fond `BackPack` / `BackpackOutline`, grille **9×6** (cases 26 px), icônes `64kInv*` |
 | `T4CInvItemIconMap.gen.cpp` | Table **appearance → nom sprite** (~459 entrées), extraite des `BIND_INV` de `VisualObjectList.cpp` |
 | Touche **B** | Ouvre le panel graphique (opcode **18** inchangé) |
-| Side menu **BackPack** | Ouvre le même panel puis ferme la barre latérale |
+| Side menu **BackPack** | Ouvre le même panel graphique |
 
 **Génération offline (pas de Python au runtime) :**
 
@@ -206,20 +206,33 @@ Régénère `src/gui/T4CInvItemIconMap.gen.cpp` si la table Windows change.
 **Limites connues :**
 
 - Pas encore drag & drop / use item / équipement graphique.
-- Side menu : bande « carte pixelisée » par transparence du sprite — correctif fond opaque ci-dessous.
-- Boutons side menu hors Options/BackPack → toujours placeholder.
+- Side menu (Esc) : hitboxes alignées sur le cadre ; minimap TMI Windows non portée.
+- Side menu : Macros / Groupe / Chat → placeholder.
 
-**Fichiers :** `WorldBackpackPanel.{cpp,h}`, `T4CInvItemIcons.{cpp,h}`, `T4CInvItemIconMap.gen.cpp`, `scripts/generate_t4c_inv_icon_map.py`, `GameWorldScreen.{cpp,h}`, `WorldSideMenu.{cpp,h}`, `cmake/TncGraphical.cmake`.
+**Fichiers :** `WorldBackpackPanel.{cpp,h}`, `T4CInvItemIcons.{cpp,h}`, `T4CInvItemIconMap.gen.cpp`, `scripts/generate_t4c_inv_icon_map.py`, `GameWorldScreen.{cpp,h}`, `cmake/TncGraphical.cmake`.
 
-### 2026-05-27 — SideMenu : fond opaque anti-chevauchement carte
+### 2026-05-28 02:38:03 — SideMenu Esc : hitboxes sur le cadre + options audio
 
-**Symptôme :** barre latérale (Esc) recouverte à moitié par la carte isométrique visible à travers les zones transparentes de `64kSideBox` → aspect « bande pixelisée ».
+**Problème :** barre latérale (Esc) — icônes propres dans `64kSideBox`, mais les sprites `64kSideButton*` empilés en colonne créaient une couche « pourrie » par-dessus ; les clics ne correspondaient pas aux icônes (sac OK, fiche perso morte, 3ᵉ case ouvrait Options).
 
-**Correctif :** remplissage opaque `0xFF101820` sur toute la colonne gauche (`columnWidth()`) avant blit box/boutons ; `startOffsetX()` = largeur colonne réelle.
+**Correctif :**
 
-**Reste à faire (chantier séparé) :** minimap TMI Windows (`SideMenu::m_MainTMI`) non portée.
+| Élément | Détail |
+|---------|--------|
+| Rendu | **Uniquement** `64kSideBox` — plus de blit `64kSideButton*` (icônes déjà peintes dans le cadre) |
+| Hitboxes | 7 zones invisibles **40×38** aux encoches Y mesurées sur export BMP (`2, 49, 87, 284, 322, 353, 388`), X=6 |
+| Ordre visuel (haut→bas) | Fiche perso → Sac → Grimoire → Options → Macros → Groupe → Chat |
+| Fiche perso (slot 1) | Panneau texte **kind 6** — stats opcode **43** (`T4CPlayerStatus`) |
+| Grimoire (slot 3) | Panneau sorts **kind 3** (équivalent touche **P**) |
+| Sac (slot 2) | Panel VSF / opcode **18** (inchangé) |
+| Options (slot 4) | Popup étendue : **Musique** / **Sons** (`←`/`→`, ±5 %), Annuler, Retour login, Quitter |
+| Audio | `T4CGameMusic::GetVolume` / `SetVolume` ; `GetSfxVolume` / `SetSfxVolume` (SFX mémorisé, pipeline pas encore branché) |
 
-**Fichiers :** `WorldSideMenu.{cpp,h}`.
+**Abandonné :** fond opaque « minimap » sur la colonne — sans effet utile, bande noire indésirable.
+
+**Limites :** minimap TMI Windows (`SideMenu::m_MainTMI`) non portée ; Macros / Groupe / Chat = placeholder ; réglage Sons sans effet tant que les SFX ne sont pas câblés.
+
+**Fichiers :** `WorldSideMenu.{cpp,h}`, `GameWorldScreen.{cpp,h}`, `T4CGameMusic.{cpp,h}`.
 
 ---
 
