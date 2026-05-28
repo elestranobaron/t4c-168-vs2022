@@ -267,6 +267,10 @@ void T4CLoginSessionDrainRemoteUnitEvents(std::vector<T4CRemoteUnitEvent> *outEv
 /** Nom NPCList / VSF pour une apparence serveur (20006 → BlackWarrior, etc.). */
 const char *T4CSpriteNameFromAppearance(std::uint16_t appearance);
 
+/** True si cette unite ne doit pas etre dessinee comme NPC distant (joueur local / PC proche). */
+bool T4CLoginSessionShouldSkipRemoteUnit(std::uint16_t appearance, std::int32_t unitId, unsigned int x,
+                                         unsigned int y);
+
 /** Reinitialise la file (logout, teleport, retour login). */
 void T4CLoginSessionClearRemoteUnits();
 void T4CLoginSessionCopyGroundObjectMarkers(std::vector<T4CGroundObjectMarker> *outMarkers);

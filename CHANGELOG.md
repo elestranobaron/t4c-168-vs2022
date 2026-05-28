@@ -211,6 +211,85 @@ Régénère `src/gui/T4CInvItemIconMap.gen.cpp` si la table Windows change.
 
 **Fichiers :** `WorldBackpackPanel.{cpp,h}`, `T4CInvItemIcons.{cpp,h}`, `T4CInvItemIconMap.gen.cpp`, `scripts/generate_t4c_inv_icon_map.py`, `GameWorldScreen.{cpp,h}`, `cmake/TncGraphical.cmake`.
 
+### 2026-05-28 04:52:34 — Mobs : opcode 10001 (combat) + glide identique au joueur
+
+**Famille : Unités réseau**
+
+**Problème :** gobs **téléportent** sans anim de marche ; le perso glide (`move_to`) mais reste un peu erratique.
+
+**Cause :** en combat le serveur envoie surtout **`__EVENT_ATTACK` (opcode 10001)** avec les coords attaquant/cible — pas des opcode **1** par case. Le client ignorait 10001 ; les snaps opcode **16** puis rattrapage = téléportation.
+
+**Correctif :**
+
+| Élément | Détail |
+|---------|--------|
+| `HandleEventAttack()` | Parse paquet serveur (ids + X/Y attaquant et cible) → `QueueRemoteUnitMove` |
+| `applyRemoteNpcMotion()` | **Même logique** que `applyServerPlayerPosition` : `set_world_pos(from)` + `move_to` si Manhattan ≤ **4**, sinon snap |
+| Coalescence Move | Un seul glide visuel par frame et par `unitId` (file UDP peut contenir N paquets) |
+| `g_remoteUnitAppearance` | Map unitId→apparence pour relier 10001 aux mobs déjà spawn (opcode 16) |
+
+**Limites :** pas d’anim de coup (`set_action('A')` / `SetAttack` Windows) sur opcode **10001** — marche seulement.
+
+**Fichiers :** `T4CLoginSession.cpp`, `T4CLoginSession.h`, `GameWorldScreen.{cpp,h}`.
+
+### 2026-05-28 04:25:46 — Fix mobs figés au corps à corps (purge + anim)
+
+**Famille : Unités réseau**
+
+**Problème :** mobs visibles (opcode **16**) mais **jambes figées**, plus de déplacement ni téléportation en combat — logs : beaucoup d’opcode **1** silencieux, joueur OK.
+
+**Causes :**
+
+| Bug | Effet |
+|-----|--------|
+| `purgeStalePlayerDuplicateRemotes()` passait `active.appearance` (PC) au lieu de l’apparence distante | Toute unité dans **4 cases** du joueur était **retirée** à chaque frame sync |
+| `applyRemoteNpcMotion()` : `manhattan == 0` → `set_action('A')` | Mobs bloqués en pose attaque sans marche |
+| `HandleUnitUpdate()` : `QueueRemoteUnitSpawn` sur chaque **69** | Re-snap position depuis cache sol obsolète |
+
+**Correctif :**
+
+| Élément | Détail |
+|---------|--------|
+| `remoteAppearances_` | Apparence par `unitId` pour purge/filtre corrects |
+| `purgeStalePlayerDuplicateRemotes()` | Filtre avec l’apparence **de l’unité distante**, pas celle du joueur |
+| `T4CLoginSessionShouldSkipRemoteUnit()` | Uniquement même `unitId` ou PC **sur la case exacte** du joueur (plus de rayon 4) |
+| `applyRemoteNpcMotion()` | Plus d’attaque sur delta 0 (supprimé) ; glide affiné ensuite (entrée 04:52) |
+| `HandleUnitUpdate()` | HP seulement (`QueueRemoteUnitUpdate`), plus de re-spawn |
+
+**Fichiers :** `GameWorldScreen.{cpp,h}`, `T4CLoginSession.cpp`.
+
+### 2026-05-28 03:59:19 — Fix regression déplacement joueur (doublon PC opcode 16)
+
+**Problème :** après anim mobs, le perso « fait n'importe quoi » — opcode **16** spawnait un **2ᵉ Warrio** (ex. `id=4` @ 2944,1059) ; snaps serveur sur 2+ cases.
+
+**Correctif :**
+
+| Élément | Détail |
+|---------|--------|
+| `T4CLoginSessionShouldSkipRemoteUnit()` | Ignore tout **PC** (même apparence) dans un rayon **4 cases** du joueur local |
+| `purgeStalePlayerDuplicateRemotes()` | Retire les doublons déjà spawnés avant sync |
+| Glide joueur | `applyServerPlayerPosition` : `move_to` jusqu'à **4 cases** Manhattan (plus seulement 1) |
+| Mobs | Glide distant max **8 cases** (réduit snap longue distance) |
+
+### 2026-05-28 03:47:03 — Unités distantes : glide move_to + anim marche / attaque
+
+**Famille : Unités réseau**
+
+**Problème :** mobs visibles mais **téléportation** case par case (seul le pas adjacent utilisait `move_to`) ; pas d’anim marche ni attaque.
+
+**Correctif :**
+
+| Élément | Détail |
+|---------|--------|
+| `applyRemoteNpcMotion()` | `move_to` jusqu’à **20 cases** Manhattan ; au-delà = snap (`set_world_pos`) |
+| Marche | `set_action('D')` + `set_direction` sur tout déplacement glide |
+| Attaque | opcode **1** sans changement de case (`hasPrev` + delta 0) → `set_action('A')` |
+| Mort | opcode **69** avec `hpPercent == 0` → `set_action('M')` |
+
+**Limites :** pas de ciblage attaque / orientation vers la victime ; opcodes combat Windows (**10001+**) toujours non branchés.
+
+**Fichiers :** `GameWorldScreen.{cpp,h}`.
+
 ### 2026-05-28 03:11:15 — Unités réseau : opcode 60/16 (GetNearItems) fiable
 
 **Famille : Unités réseau**

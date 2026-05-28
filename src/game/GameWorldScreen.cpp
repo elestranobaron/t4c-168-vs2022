@@ -401,7 +401,7 @@ void GameWorldScreen::pollNearItemsResync() {
     if (!playerNpcSpawned_) {
         return;
     }
-    static constexpr unsigned int kResyncTileRadius = 12;
+    static constexpr unsigned int kResyncTileRadius = 18;
     if (!nearItemsAnchorSet_) {
         nearItemsAnchorX_ = playerX_;
         nearItemsAnchorY_ = playerY_;
@@ -421,6 +421,34 @@ void GameWorldScreen::pollNearItemsResync() {
 #endif
 }
 
+void GameWorldScreen::applyRemoteNpcMotion(const int npcId, const unsigned int fromX, const unsigned int fromY,
+                                           const unsigned int toX, const unsigned int toY,
+                                           const bool /*hasPreviousPos*/) {
+    if (!npcm_) {
+        return;
+    }
+    const int dx = static_cast<int>(toX) - static_cast<int>(fromX);
+    const int dy = static_cast<int>(toY) - static_cast<int>(fromY);
+    if (dx == 0 && dy == 0) {
+        return;
+    }
+    const int adx = dx < 0 ? -dx : dx;
+    const int ady = dy < 0 ? -dy : dy;
+    const int manhattan = adx + ady;
+
+    npcm_->set_direction(npcId, facingDegreesFromDelta(dx, dy));
+
+    /* Meme glide que applyServerPlayerPosition (perso id=0). */
+    if (manhattan > 0 && manhattan <= 4) {
+        npcm_->set_world_pos(npcId, static_cast<int>(fromX), static_cast<int>(fromY));
+        npcm_->move_to(npcId, toX, toY, kMoveVisualSpeed, kMoveVisualStepsMul);
+        npcm_->set_action(npcId, 'D');
+    } else {
+        npcm_->set_world_pos(npcId, static_cast<int>(toX), static_cast<int>(toY));
+        npcm_->set_action(npcId, 'S');
+    }
+}
+
 void GameWorldScreen::clearRemoteUnits() {
     if (npcm_) {
         for (const std::int32_t id : remoteUnitIds_) {
@@ -428,7 +456,39 @@ void GameWorldScreen::clearRemoteUnits() {
         }
     }
     remoteUnitIds_.clear();
+    remoteAppearances_.clear();
     remotePositions_.clear();
+}
+
+void GameWorldScreen::purgeStalePlayerDuplicateRemotes() {
+#if defined(LINUX_PORT)
+    if (!npcm_) {
+        return;
+    }
+    T4CActivePlayer active{};
+    T4CLoginSessionGetActivePlayer(&active);
+    if (!active.valid || active.appearance == 0) {
+        return;
+    }
+    std::vector<std::int32_t> removeIds;
+    for (const std::int32_t id : remoteUnitIds_) {
+        const auto posIt = remotePositions_.find(id);
+        const auto appIt = remoteAppearances_.find(id);
+        if (posIt == remotePositions_.end() || appIt == remoteAppearances_.end()) {
+            continue;
+        }
+        if (T4CLoginSessionShouldSkipRemoteUnit(appIt->second, id, posIt->second.first, posIt->second.second)) {
+            removeIds.push_back(id);
+        }
+    }
+    for (const std::int32_t id : removeIds) {
+        npcm_->remove_npc(static_cast<int>(id));
+        remoteUnitIds_.erase(id);
+        remoteAppearances_.erase(id);
+        remotePositions_.erase(id);
+        SDL_Log("[GameWorld] retrait doublon PC distant id=%d", static_cast<int>(id));
+    }
+#endif
 }
 
 void GameWorldScreen::syncRemoteUnitsFromNetwork() {
@@ -436,13 +496,24 @@ void GameWorldScreen::syncRemoteUnitsFromNetwork() {
         return;
     }
 
+    purgeStalePlayerDuplicateRemotes();
+
     std::vector<T4CRemoteUnitEvent> events;
     T4CLoginSessionDrainRemoteUnitEvents(&events);
     if (events.empty()) {
         return;
     }
 
-    for (const T4CRemoteUnitEvent &ev : events) {
+    /* Plusieurs opcode 1 / 10001 par frame : ne garder que le dernier Move par unite (evite teleport). */
+    std::unordered_map<std::int32_t, size_t> lastMoveIndex;
+    for (size_t i = 0; i < events.size(); ++i) {
+        if (events[i].kind == T4CRemoteUnitEventKind::Move) {
+            lastMoveIndex[events[i].unitId] = i;
+        }
+    }
+
+    for (size_t evIndex = 0; evIndex < events.size(); ++evIndex) {
+        const T4CRemoteUnitEvent &ev = events[evIndex];
         const int npcId = static_cast<int>(ev.unitId);
         if (npcId == 0) {
             continue;
@@ -462,6 +533,7 @@ void GameWorldScreen::syncRemoteUnitsFromNetwork() {
                 } else {
                     SDL_Log("[GameWorld] echec spawn unite id=%d sprite=%s (NPCList?)", npcId, sprite);
                 }
+                remoteAppearances_[ev.unitId] = ev.appearance;
                 remotePositions_[ev.unitId] = {ev.x, ev.y};
                 break;
             }
@@ -474,31 +546,38 @@ void GameWorldScreen::syncRemoteUnitsFromNetwork() {
                         remoteUnitIds_.insert(ev.unitId);
                     }
                 }
+                if (ev.appearance != 0) {
+                    remoteAppearances_[ev.unitId] = ev.appearance;
+                }
                 const auto prevIt = remotePositions_.find(ev.unitId);
                 const bool hasPrev = prevIt != remotePositions_.end();
                 const unsigned int px = hasPrev ? prevIt->second.first : ev.x;
                 const unsigned int py = hasPrev ? prevIt->second.second : ev.y;
-                const int dx = static_cast<int>(ev.x) - static_cast<int>(px);
-                const int dy = static_cast<int>(ev.y) - static_cast<int>(py);
-                const bool adjacent = hasPrev && ((dx == 0 && (dy == 1 || dy == -1)) || (dy == 0 && (dx == 1 || dx == -1)) ||
-                                                  (dx != 0 && dy != 0 && std::abs(dx) == 1 && std::abs(dy) == 1));
-                if (adjacent && !npcm_->is_moving(npcId)) {
-                    npcm_->move_to(npcId, ev.x, ev.y, kMoveVisualSpeed, kMoveVisualStepsMul);
-                } else {
-                    npcm_->set_world_pos(npcId, static_cast<int>(ev.x), static_cast<int>(ev.y));
+                const auto lastMoveIt = lastMoveIndex.find(ev.unitId);
+                const bool applyVisualMove =
+                    lastMoveIt == lastMoveIndex.end() || lastMoveIt->second == evIndex;
+                if (applyVisualMove) {
+                    applyRemoteNpcMotion(npcId, px, py, ev.x, ev.y, hasPrev);
                 }
                 remotePositions_[ev.unitId] = {ev.x, ev.y};
                 break;
             }
             case T4CRemoteUnitEventKind::Update:
-                if (remoteUnitIds_.count(ev.unitId) != 0 && ev.appearance != 0) {
-                    npcm_->set_npc_type(npcId, T4CSpriteNameFromAppearance(ev.appearance));
+                if (remoteUnitIds_.count(ev.unitId) != 0) {
+                    if (ev.appearance != 0) {
+                        remoteAppearances_[ev.unitId] = ev.appearance;
+                        npcm_->set_npc_type(npcId, T4CSpriteNameFromAppearance(ev.appearance));
+                    }
+                    if (static_cast<unsigned char>(ev.hpPercent) == 0) {
+                        npcm_->set_action(npcId, 'M');
+                    }
                 }
                 break;
             case T4CRemoteUnitEventKind::Remove:
                 if (remoteUnitIds_.count(ev.unitId) != 0) {
                     npcm_->remove_npc(npcId);
                     remoteUnitIds_.erase(ev.unitId);
+                    remoteAppearances_.erase(ev.unitId);
                     remotePositions_.erase(ev.unitId);
                 }
                 break;
@@ -511,6 +590,7 @@ void GameWorldScreen::Shutdown() {
     ready_ = false;
     playerNpcSpawned_ = false;
     remoteUnitIds_.clear();
+    remoteAppearances_.clear();
     remotePositions_.clear();
     nearItemsAnchorSet_ = false;
     delete npcm_;
@@ -615,15 +695,15 @@ void GameWorldScreen::applyServerPlayerPosition(const unsigned int x, const unsi
     }
     const int adx = dx < 0 ? -dx : dx;
     const int ady = dy < 0 ? -dy : dy;
-    const bool oneStep = adx <= 1 && ady <= 1 && (dx != 0 || dy != 0);
-    if (oneStep && playerNpcSpawned_ && npcm_) {
+    const int manhattan = adx + ady;
+    if (manhattan > 0 && manhattan <= 4 && playerNpcSpawned_ && npcm_) {
         npcm_->set_world_pos(0, static_cast<int>(playerX_), static_cast<int>(playerY_));
         npcm_->move_to(0, x, y, kMoveVisualSpeed, kMoveVisualStepsMul);
         playerX_ = x;
         playerY_ = y;
         syncCameraToPlayer();
         setPlayerWalkAnim(true);
-    } else {
+    } else if (manhattan > 0) {
         snapPlayerVisual(x, y);
         setPlayerWalkAnim(false);
     }

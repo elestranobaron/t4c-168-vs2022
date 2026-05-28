@@ -128,6 +128,11 @@ static std::atomic<bool> g_nearItemsRequestPending{false};
 static constexpr std::uint16_t kEventObjectMoved = 1;
 /** __EVENT_OBJECT_APPEARED_LIST — lot initial GetNearItems / peripherie. */
 static constexpr std::uint16_t kEventObjectAppearedList = 16;
+/** __EVENT_ATTACK (EventListing.h) — positions attaquant/cible en combat (pas opcode 1). */
+static constexpr std::uint16_t kEventAttack = 10001;
+
+/** unitId → derniere apparence connue (spawn / move / 16) pour __EVENT_ATTACK. */
+static std::unordered_map<std::int32_t, std::uint16_t> g_remoteUnitAppearance;
 
 constexpr std::uint16_t kTfcStillConnected = 10; /* TFCSocket.h — serveur ; reponse = RQ_Ack (10) */
 
@@ -1559,9 +1564,8 @@ static bool IsLocalPlayerUnitId(const std::int32_t unitId) {
     return g_activePlayer.valid && g_activePlayer.unitId != 0 && unitId == g_activePlayer.unitId;
 }
 
-/** Ne pas instancier le joueur local comme unite distante (opcode 16 avant unitId connu). */
-static bool ShouldSkipAsRemoteUnit(const unsigned int x, const unsigned int y, const std::uint16_t appearance,
-                                   const std::int32_t unitId) {
+bool T4CLoginSessionShouldSkipRemoteUnit(const std::uint16_t appearance, const std::int32_t unitId,
+                                         const unsigned int x, const unsigned int y) {
     std::lock_guard<std::mutex> lock(g_activePlayerMutex);
     if (!g_activePlayer.valid) {
         return false;
@@ -1575,9 +1579,30 @@ static bool ShouldSkipAsRemoteUnit(const unsigned int x, const unsigned int y, c
     return false;
 }
 
+static bool ShouldSkipAsRemoteUnit(const unsigned int x, const unsigned int y, const std::uint16_t appearance,
+                                   const std::int32_t unitId) {
+    return T4CLoginSessionShouldSkipRemoteUnit(appearance, unitId, x, y);
+}
+
 static void PushRemoteUnitEvent(T4CRemoteUnitEvent ev) {
     std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
     g_remoteEvents.push_back(ev);
+}
+
+static void RememberRemoteUnitAppearance(const std::int32_t unitId, const std::uint16_t appearance) {
+    if (unitId == 0 || appearance == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
+    g_remoteUnitAppearance[unitId] = appearance;
+}
+
+static void ForgetRemoteUnitAppearance(const std::int32_t unitId) {
+    if (unitId == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
+    g_remoteUnitAppearance.erase(unitId);
 }
 
 static bool IsGroundObjectAppearance(const std::uint16_t appearance) {
@@ -1721,6 +1746,7 @@ static void QueueRemoteUnitSpawn(const unsigned int x, const unsigned int y, con
     ev.x = x;
     ev.y = y;
     ev.hpPercent = hpPercent;
+    RememberRemoteUnitAppearance(unitId, appearance);
     PushRemoteUnitEvent(ev);
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
                            "[PHASE] Unite distante spawn id=%d app=%u @ %u,%u sprite=%s.",
@@ -1733,6 +1759,7 @@ static void QueueRemoteUnitMove(const unsigned int x, const unsigned int y, cons
     if (!IsRemoteDrawableUnit(appearance) || ShouldSkipAsRemoteUnit(x, y, appearance, unitId)) {
         return;
     }
+    RememberRemoteUnitAppearance(unitId, appearance);
     T4CRemoteUnitEvent ev{};
     ev.kind = T4CRemoteUnitEventKind::Move;
     ev.unitId = unitId;
@@ -1740,6 +1767,21 @@ static void QueueRemoteUnitMove(const unsigned int x, const unsigned int y, cons
     ev.x = x;
     ev.y = y;
     PushRemoteUnitEvent(ev);
+}
+
+static void QueueRemoteUnitMoveById(const unsigned int x, const unsigned int y, const std::int32_t unitId) {
+    std::uint16_t appearance = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
+        const auto it = g_remoteUnitAppearance.find(unitId);
+        if (it != g_remoteUnitAppearance.end()) {
+            appearance = it->second;
+        }
+    }
+    if (appearance == 0) {
+        return;
+    }
+    QueueRemoteUnitMove(x, y, appearance, unitId);
 }
 
 static void QueueRemoteUnitUpdate(const std::uint16_t appearance, const std::int32_t unitId, const char hpPercent) {
@@ -1758,11 +1800,44 @@ static void QueueRemoteUnitRemove(const std::int32_t unitId) {
     if (unitId == 0 || IsLocalPlayerUnitId(unitId)) {
         return;
     }
+    ForgetRemoteUnitAppearance(unitId);
     T4CRemoteUnitEvent ev{};
     ev.kind = T4CRemoteUnitEventKind::Remove;
     ev.unitId = unitId;
     PushRemoteUnitEvent(ev);
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase, "[PHASE] Unite distante remove id=%d.", static_cast<int>(unitId));
+}
+
+/** Serveur Broadcast::BCAttack — deplace attaquant et cible (combat utilise souvent 10001, pas opcode 1). */
+static void HandleEventAttack(const unsigned char *data, int len) {
+    if (!data || len < 25 || !TfcHeaderLooksSane(data, len)) {
+        return;
+    }
+    const std::int32_t attackerId = ReadBeInt32Msf(data, 6, len);
+    const std::int32_t defenderId = ReadBeInt32Msf(data, 10, len);
+    const char hpPercent = static_cast<char>(data[16]);
+    const std::int16_t ax = static_cast<std::int16_t>(ReadBeUint16(data, 17, len));
+    const std::int16_t ay = static_cast<std::int16_t>(ReadBeUint16(data, 19, len));
+    const std::int16_t dx = static_cast<std::int16_t>(ReadBeUint16(data, 21, len));
+    const std::int16_t dy = static_cast<std::int16_t>(ReadBeUint16(data, 23, len));
+
+    if (!IsLocalPlayerUnitId(attackerId) && ax >= 0 && ay >= 0) {
+        QueueRemoteUnitMoveById(static_cast<unsigned int>(ax), static_cast<unsigned int>(ay), attackerId);
+    }
+    if (!IsLocalPlayerUnitId(defenderId) && dx >= 0 && dy >= 0) {
+        QueueRemoteUnitMoveById(static_cast<unsigned int>(dx), static_cast<unsigned int>(dy), defenderId);
+        std::uint16_t defApp = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
+            const auto it = g_remoteUnitAppearance.find(defenderId);
+            if (it != g_remoteUnitAppearance.end()) {
+                defApp = it->second;
+            }
+        }
+        if (defApp != 0) {
+            QueueRemoteUnitUpdate(defApp, defenderId, hpPercent);
+        }
+    }
 }
 
 static void HandleObjectAppearedList(const unsigned char *data, int len) {
@@ -1818,23 +1893,6 @@ static void HandleUnitUpdate(const unsigned char *data, int len) {
     char hpPercent = 0;
     if (!ParsePacketUnitInformation(data, 6, len, &appearance, &unitId, nullptr, nullptr, &hpPercent)) {
         return;
-    }
-    if (IsRemoteDrawableUnit(appearance) && !IsLocalPlayerUnitId(unitId)) {
-        unsigned int ux = 0;
-        unsigned int uy = 0;
-        bool hasPos = false;
-        {
-            std::lock_guard<std::mutex> lock(g_groundObjectsMutex);
-            const auto it = g_groundObjectsByUnitId.find(unitId);
-            if (it != g_groundObjectsByUnitId.end()) {
-                ux = it->second.x;
-                uy = it->second.y;
-                hasPos = true;
-            }
-        }
-        if (hasPos) {
-            QueueRemoteUnitSpawn(ux, uy, appearance, unitId, hpPercent);
-        }
     }
     QueueRemoteUnitUpdate(appearance, unitId, hpPercent);
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
@@ -2441,6 +2499,8 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
         HandleMissingUnit(bytes, nBufferSize);
     } else if (op == static_cast<std::uint16_t>(RQ_TeleportPlayer) && CanProcessWorldUnitPackets()) {
         HandleTeleportPlayer(bytes, nBufferSize);
+    } else if (op == kEventAttack && CanProcessWorldUnitPackets()) {
+        HandleEventAttack(bytes, nBufferSize);
     } else if (op == kEventObjectMoved && CanProcessWorldUnitPackets()) {
         if (ApplyServerUnitPosition(bytes, nBufferSize)) {
             T4CActivePlayer snap{};
@@ -3359,6 +3419,7 @@ void T4CLoginSessionClearRemoteUnits() {
     {
         std::lock_guard<std::mutex> lock(g_remoteEventsMutex);
         g_remoteEvents.clear();
+        g_remoteUnitAppearance.clear();
     }
     {
         std::lock_guard<std::mutex> lock(g_groundObjectsMutex);
@@ -3676,6 +3737,10 @@ void T4CLoginSessionCopyGroundObjectMarkers(std::vector<T4CGroundObjectMarker> *
 
 const char *T4CSpriteNameFromAppearance(std::uint16_t) {
     return "BlackWarrior";
+}
+
+bool T4CLoginSessionShouldSkipRemoteUnit(std::uint16_t, std::int32_t, unsigned int, unsigned int) {
+    return false;
 }
 
 const char *T4CPlayerSpriteNpcName(const T4CActivePlayer &) {

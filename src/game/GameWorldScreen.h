@@ -76,7 +76,10 @@ class GameWorldScreen {
     bool tryMovePlayer(std::uint16_t moveOpcode);
     void clearRemoteUnits();
     void syncRemoteUnitsFromNetwork();
+    void purgeStalePlayerDuplicateRemotes();
     void pollNearItemsResync();
+    void applyRemoteNpcMotion(int npcId, unsigned int fromX, unsigned int fromY, unsigned int toX, unsigned int toY,
+                              bool hasPreviousPos);
     void drawOptionsPopup();
     bool handleSideMenuKey(const SDL_Event &event);
     bool handleOptionsPopupKey(const SDL_Event &event);
@@ -124,6 +127,7 @@ class GameWorldScreen {
     WorldBackpackPanel backpackPanel_;
     bool playerNpcSpawned_{false};
     std::unordered_set<std::int32_t> remoteUnitIds_;
+    std::unordered_map<std::int32_t, std::uint16_t> remoteAppearances_;
     std::unordered_map<std::int32_t, std::pair<unsigned int, unsigned int>> remotePositions_;
     unsigned int nearItemsAnchorX_{0};
     unsigned int nearItemsAnchorY_{0};
