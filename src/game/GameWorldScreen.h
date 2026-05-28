@@ -76,6 +76,7 @@ class GameWorldScreen {
     bool tryMovePlayer(std::uint16_t moveOpcode);
     void clearRemoteUnits();
     void syncRemoteUnitsFromNetwork();
+    void pollNearItemsResync();
     void drawOptionsPopup();
     bool handleSideMenuKey(const SDL_Event &event);
     bool handleOptionsPopupKey(const SDL_Event &event);
@@ -124,6 +125,9 @@ class GameWorldScreen {
     bool playerNpcSpawned_{false};
     std::unordered_set<std::int32_t> remoteUnitIds_;
     std::unordered_map<std::int32_t, std::pair<unsigned int, unsigned int>> remotePositions_;
+    unsigned int nearItemsAnchorX_{0};
+    unsigned int nearItemsAnchorY_{0};
+    bool nearItemsAnchorSet_{false};
     /** 0=none 1=sac 2=skills 3=sorts 4=coffre banque 5=equipement 6=fiche stats */
     int characterPanel_{0};
     std::vector<T4CGroundObjectMarker> groundMarkers_;

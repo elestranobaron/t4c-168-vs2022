@@ -211,6 +211,34 @@ Régénère `src/gui/T4CInvItemIconMap.gen.cpp` si la table Windows change.
 
 **Fichiers :** `WorldBackpackPanel.{cpp,h}`, `T4CInvItemIcons.{cpp,h}`, `T4CInvItemIconMap.gen.cpp`, `scripts/generate_t4c_inv_icon_map.py`, `GameWorldScreen.{cpp,h}`, `cmake/TncGraphical.cmake`.
 
+### 2026-05-28 03:11:15 — Unités réseau : opcode 60/16 (GetNearItems) fiable
+
+**Famille : Unités réseau**
+
+**Problème :** mobs invisibles en combat — le serveur inflige des dégâts (opcode 33) mais aucun gobelin à l’écran ; la réponse **RQ_GetNearItems (60)** arrive en **opcode 16** et était souvent **ignorée** tant que la réponse **46** n’était pas `code=0` (course 16 avant 46).
+
+**Correctif :**
+
+| Élément | Détail |
+|---------|--------|
+| Gate réseau | `CanProcessWorldUnitPackets()` — traite **16 / 1 / 69 / 70 / 57 / 10004** dès `pipelineStep ≥ 6`, sans attendre le 46 |
+| Opcode **60** entrant | Ack vide loggé ; si corps > 8 octets, parse comme lot **16** |
+| Opcode **69** | Spawn distant si position connue (`groundObjects`) et unité pas encore instanciée |
+| Resync client | `T4CLoginSessionRequestNearItems()` (cooldown 1,5 s) + `pollNearItemsResync()` toutes les **12 cases** parcourues |
+| Debug | Log quand un spawn est filtré (apparence non drawable / joueur local) |
+
+**Limites :** pas d’anim attaque/mort ni chiffres de dégâts (famille **Combat / loot** — étape suivante).
+
+**Fichiers :** `T4CLoginSession.{cpp,h}`, `GameWorldScreen.{cpp,h}`.
+
+### 2026-05-28 03:25:00 — Fix regression : deadlock menu bloque (RequestNearItems)
+
+**Problème :** apres entree en jeu, musique monde mais ecran reste sur le menu persos — thread principal bloque sur `g_sessionMutex` (`futex_wait` dans gdb).
+
+**Cause :** `T4CLoginSessionRequestNearItems()` verrouillait `g_sessionMutex` puis appelait `SendGetNearItemsLocked()` → `SendToServerLocked()` qui re-verrouille le meme mutex (non recursif).
+
+**Correctif :** retirer le double lock ; `pollNearItemsResync()` peut de nouveau envoyer le 60 sans freezer la boucle principale.
+
 ### 2026-05-28 02:38:03 — SideMenu Esc : hitboxes sur le cadre + options audio
 
 **Problème :** barre latérale (Esc) — icônes propres dans `64kSideBox`, mais les sprites `64kSideButton*` empilés en colonne créaient une couche « pourrie » par-dessus ; les clics ne correspondaient pas aux icônes (sac OK, fiche perso morte, 3ᵉ case ouvrait Options).

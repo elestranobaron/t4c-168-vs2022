@@ -227,6 +227,9 @@ struct T4CPlayerTeleport {
 
 bool T4CLoginSessionConsumePlayerTeleport(T4CPlayerTeleport *outTeleport);
 
+/** Demande les unites peripheriques (RQ_GetNearItems 60 → reponse serveur opcode 16). */
+bool T4CLoginSessionRequestNearItems();
+
 /** Envoie un déplacement (opcodes 1–8, aligné TFCSocket.cpp). Retourne false si pas en jeu. */
 bool T4CLoginSessionSendMove(std::uint16_t moveOpcode);
 

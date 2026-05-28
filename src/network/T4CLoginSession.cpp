@@ -121,6 +121,8 @@ static std::mutex g_remoteEventsMutex;
 static std::vector<T4CRemoteUnitEvent> g_remoteEvents;
 static std::mutex g_groundObjectsMutex;
 static std::unordered_map<std::int32_t, T4CGroundObjectMarker> g_groundObjectsByUnitId;
+static std::chrono::steady_clock::time_point g_lastNearItemsRequestAt{};
+static std::atomic<bool> g_nearItemsRequestPending{false};
 
 /** __EVENT_OBJECT_MOVED (EventListing.h) — deplacement broadcast. */
 static constexpr std::uint16_t kEventObjectMoved = 1;
@@ -919,7 +921,14 @@ static void HandleDeletePlayerReply(const unsigned char *data, int len) {
 static void SendGetNearItemsLocked() {
     const auto pkt = BuildOpcodeOnlyPacket(static_cast<std::uint16_t>(RQ_GetNearItems));
     SendToServerLocked(pkt);
+    g_lastNearItemsRequestAt = std::chrono::steady_clock::now();
+    g_nearItemsRequestPending.store(true);
     T4CNetworkDebugLog("[UDP] -> RQ_GetNearItems (60).");
+}
+
+/** Paquets monde (16/1/69/70/57/10004) : pas bloquer sur la reponse 46 (course 16 avant 46). */
+static bool CanProcessWorldUnitPackets() {
+    return g_pipelineStep.load() >= 6 && !g_waitingPutPlayerInGame.load();
 }
 
 static void SendGetSkillListLocked() {
@@ -1693,7 +1702,16 @@ const char *T4CSpriteNameFromAppearance(const std::uint16_t appearance) {
 
 static void QueueRemoteUnitSpawn(const unsigned int x, const unsigned int y, const std::uint16_t appearance,
                                  const std::int32_t unitId, const char hpPercent) {
-    if (!IsRemoteDrawableUnit(appearance) || ShouldSkipAsRemoteUnit(x, y, appearance, unitId)) {
+    if (!IsRemoteDrawableUnit(appearance)) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                               "[PHASE] Spawn ignore id=%d app=%u (non drawable).",
+                               static_cast<int>(unitId), static_cast<unsigned>(appearance));
+        return;
+    }
+    if (ShouldSkipAsRemoteUnit(x, y, appearance, unitId)) {
+        T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                               "[PHASE] Spawn ignore id=%d app=%u @ %u,%u (joueur local / filtre).",
+                               static_cast<int>(unitId), static_cast<unsigned>(appearance), x, y);
         return;
     }
     T4CRemoteUnitEvent ev{};
@@ -1772,9 +1790,23 @@ static void HandleObjectAppearedList(const unsigned char *data, int len) {
         }
         off += 13;
     }
+    g_nearItemsRequestPending.store(false);
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
                            "[PHASE] __EVENT_OBJECT_APPEARED_LIST (16) : %d unite(s) peripheriques.",
                            count);
+}
+
+static void HandleGetNearItemsReply(const unsigned char *data, int len) {
+    if (!data || len < 6 || !TfcHeaderLooksSane(data, len)) {
+        return;
+    }
+    g_nearItemsRequestPending.store(false);
+    if (len > 8) {
+        HandleObjectAppearedList(data, len);
+        return;
+    }
+    T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
+                           "[PHASE] RQ_GetNearItems (60) reponse vide — aucune unite peripherique.");
 }
 
 static void HandleUnitUpdate(const unsigned char *data, int len) {
@@ -1786,6 +1818,23 @@ static void HandleUnitUpdate(const unsigned char *data, int len) {
     char hpPercent = 0;
     if (!ParsePacketUnitInformation(data, 6, len, &appearance, &unitId, nullptr, nullptr, &hpPercent)) {
         return;
+    }
+    if (IsRemoteDrawableUnit(appearance) && !IsLocalPlayerUnitId(unitId)) {
+        unsigned int ux = 0;
+        unsigned int uy = 0;
+        bool hasPos = false;
+        {
+            std::lock_guard<std::mutex> lock(g_groundObjectsMutex);
+            const auto it = g_groundObjectsByUnitId.find(unitId);
+            if (it != g_groundObjectsByUnitId.end()) {
+                ux = it->second.x;
+                uy = it->second.y;
+                hasPos = true;
+            }
+        }
+        if (hasPos) {
+            QueueRemoteUnitSpawn(ux, uy, appearance, unitId, hpPercent);
+        }
     }
     QueueRemoteUnitUpdate(appearance, unitId, hpPercent);
     T4CNetworkDebugLogKind(T4CMatrixLogKind::Phase,
@@ -2380,20 +2429,19 @@ static void __cdecl CommReadCallback(sockaddr_in /*fromServer*/, LPBYTE lpbBuffe
     } else if (op == static_cast<std::uint16_t>(RQ_LevelUp) && g_pipelineStep.load() >= 6 &&
                !g_waitingPutPlayerInGame.load()) {
         HandleLevelUp(bytes, nBufferSize);
-    } else if (op == kTfcPacketPopup) {
+    } else if (op == kTfcPacketPopup && CanProcessWorldUnitPackets()) {
         HandlePacketPopup(bytes, nBufferSize);
-    } else if (op == kEventObjectAppearedList && g_pipelineStep.load() >= 6 && g_fromPreInGameResult.load() == 0) {
+    } else if (op == kEventObjectAppearedList && CanProcessWorldUnitPackets()) {
         HandleObjectAppearedList(bytes, nBufferSize);
-    } else if (op == static_cast<std::uint16_t>(RQ_UnitUpdate) && g_pipelineStep.load() >= 6 &&
-               g_fromPreInGameResult.load() == 0) {
+    } else if (op == static_cast<std::uint16_t>(RQ_GetNearItems) && CanProcessWorldUnitPackets()) {
+        HandleGetNearItemsReply(bytes, nBufferSize);
+    } else if (op == static_cast<std::uint16_t>(RQ_UnitUpdate) && CanProcessWorldUnitPackets()) {
         HandleUnitUpdate(bytes, nBufferSize);
-    } else if (op == static_cast<std::uint16_t>(RQ_MissingUnit) && g_pipelineStep.load() >= 6 &&
-               g_fromPreInGameResult.load() == 0) {
+    } else if (op == static_cast<std::uint16_t>(RQ_MissingUnit) && CanProcessWorldUnitPackets()) {
         HandleMissingUnit(bytes, nBufferSize);
-    } else if (op == static_cast<std::uint16_t>(RQ_TeleportPlayer) && g_pipelineStep.load() >= 6 &&
-               g_fromPreInGameResult.load() == 0) {
+    } else if (op == static_cast<std::uint16_t>(RQ_TeleportPlayer) && CanProcessWorldUnitPackets()) {
         HandleTeleportPlayer(bytes, nBufferSize);
-    } else if (op == kEventObjectMoved && g_pipelineStep.load() >= 6 && g_fromPreInGameResult.load() == 0) {
+    } else if (op == kEventObjectMoved && CanProcessWorldUnitPackets()) {
         if (ApplyServerUnitPosition(bytes, nBufferSize)) {
             T4CActivePlayer snap{};
             {
@@ -3330,6 +3378,23 @@ void T4CLoginSessionCopyGroundObjectMarkers(std::vector<T4CGroundObjectMarker> *
     }
 }
 
+bool T4CLoginSessionRequestNearItems() {
+    if (!CanProcessWorldUnitPackets()) {
+        return false;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (g_lastNearItemsRequestAt.time_since_epoch().count() != 0) {
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastNearItemsRequestAt);
+        if (elapsed.count() < 1500) {
+            return false;
+        }
+    }
+    /* SendGetNearItemsLocked -> SendToServerLocked acquiert deja g_sessionMutex. */
+    SendGetNearItemsLocked();
+    return true;
+}
+
 bool T4CLoginSessionSendMove(const std::uint16_t moveOpcode) {
     if (moveOpcode < 1 || moveOpcode > 8) {
         return false;
@@ -3594,6 +3659,10 @@ bool T4CLoginSessionConsumePlayerTeleport(T4CPlayerTeleport *) {
 }
 
 bool T4CLoginSessionSendMove(std::uint16_t) {
+    return false;
+}
+
+bool T4CLoginSessionRequestNearItems() {
     return false;
 }
 

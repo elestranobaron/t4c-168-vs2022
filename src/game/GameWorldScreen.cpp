@@ -396,6 +396,31 @@ bool GameWorldScreen::Init(SDL_Renderer *renderer, SDL_Window *window, unsigned 
     return true;
 }
 
+void GameWorldScreen::pollNearItemsResync() {
+#if defined(LINUX_PORT)
+    if (!playerNpcSpawned_) {
+        return;
+    }
+    static constexpr unsigned int kResyncTileRadius = 12;
+    if (!nearItemsAnchorSet_) {
+        nearItemsAnchorX_ = playerX_;
+        nearItemsAnchorY_ = playerY_;
+        nearItemsAnchorSet_ = true;
+        T4CLoginSessionRequestNearItems();
+        return;
+    }
+    const unsigned int dx =
+        playerX_ > nearItemsAnchorX_ ? playerX_ - nearItemsAnchorX_ : nearItemsAnchorX_ - playerX_;
+    const unsigned int dy =
+        playerY_ > nearItemsAnchorY_ ? playerY_ - nearItemsAnchorY_ : nearItemsAnchorY_ - playerY_;
+    if (dx >= kResyncTileRadius || dy >= kResyncTileRadius) {
+        nearItemsAnchorX_ = playerX_;
+        nearItemsAnchorY_ = playerY_;
+        T4CLoginSessionRequestNearItems();
+    }
+#endif
+}
+
 void GameWorldScreen::clearRemoteUnits() {
     if (npcm_) {
         for (const std::int32_t id : remoteUnitIds_) {
@@ -487,6 +512,7 @@ void GameWorldScreen::Shutdown() {
     playerNpcSpawned_ = false;
     remoteUnitIds_.clear();
     remotePositions_.clear();
+    nearItemsAnchorSet_ = false;
     delete npcm_;
     npcm_ = nullptr;
     delete txtm_;
@@ -812,6 +838,7 @@ void GameWorldScreen::Update() {
 
     pollHeldMovement();
 
+    pollNearItemsResync();
     syncRemoteUnitsFromNetwork();
 
 #if defined(LINUX_PORT)
